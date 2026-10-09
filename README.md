@@ -30,4 +30,5 @@ Supabase-Zugangsdaten stehen in `public/config.js`.
   - Umbenennen gilt für alle Buchungen dieses Händlers mit demselben alten Namen.
 - **Jahr**: Monats- und Jahressummen je Kategorie, Klick auf Kategorie zeigt Unterkategorien.
 - **Jahresvergleich**: Kategorien über alle Jahre, Δ zum Vorjahr.
+- **Eigene Regeln** (Kategorien & Regeln → „+ Regel“ oder im Bearbeiten-Dialog „Regel daraus…“): „Wenn Empfänger/Zweck enthält X → Kategorie“, optional nur Ausgaben/Einnahmen, nur ein Konto, neuer Anzeigename. Vorrang vor gelernten Regeln. Benötigt `migrations/003_eigene_regeln.sql`.
 - **Kategorien & Regeln**: Kategorien/Unterkategorien verwalten, gelernte Regeln einsehen/löschen.

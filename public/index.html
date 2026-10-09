@@ -125,6 +125,29 @@ dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
   </form>
 </dialog>
 
+<dialog id="ruleDlg">
+  <form id="ruleForm">
+    <h2 id="ruTitle">Eigene Regel</h2>
+    <div class="row">
+      <div style="flex:1"><label for="ruField">Wenn</label>
+        <select id="ruField"><option value="alle">Empfänger oder Zweck</option><option value="empfaenger">Empfänger</option><option value="zweck">Verwendungszweck</option></select></div>
+      <div style="flex:1"><label for="ruPattern">enthält</label><input id="ruPattern" required placeholder="z. B. Spotify"></div>
+    </div>
+    <div class="row">
+      <div style="flex:1"><label for="ruDir">Richtung</label>
+        <select id="ruDir"><option value="beide">Ein- und Ausgänge</option><option value="ausgabe">Nur Ausgaben</option><option value="einnahme">Nur Einnahmen</option></select></div>
+      <div style="flex:1"><label for="ruAcc">Konto</label><select id="ruAcc"></select></div>
+    </div>
+    <label for="ruSub">dann Kategorie</label><select id="ruSub" required></select>
+    <label for="ruPayee">und Empfänger umbenennen in (optional)</label><input id="ruPayee" placeholder="leer = Name nicht ändern">
+    <p class="muted" id="ruPreview" style="font-size:12px;margin:12px 0 0"></p>
+    <div class="actions">
+      <button type="button" class="ghost" id="ruCancel">Abbrechen</button>
+      <button type="submit" class="btn">Speichern &amp; anwenden</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="editDlg">
   <form id="editForm">
     <h2>Buchung bearbeiten</h2>
@@ -140,6 +163,7 @@ dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
       <div style="flex:2"><label for="edSub">Kategorie</label><select id="edSub"></select></div>
     </div>
     <div class="actions">
+      <button type="button" class="ghost" id="edRule" style="margin-right:auto">Regel daraus…</button>
       <button type="button" class="ghost" id="edCancel">Abbrechen</button>
       <button type="submit" class="btn">Speichern</button>
     </div>

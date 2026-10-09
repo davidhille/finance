@@ -3,7 +3,7 @@ const P = window.FinParser;
 const cfg = window.FIN_CONFIG;
 const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
-const S = { dupReview: [], accounts: [], acc: 'alle', cats: [], subs: [], txs: [], rules: new Map(), view: 'tx',
+const S = { userRules: [], noUserRules: false, dupReview: [], accounts: [], acc: 'alle', cats: [], subs: [], txs: [], rules: new Map(), view: 'tx',
   f: { year: 'alle', month: 'alle', cat: 'offen', q: '' }, yearSel: null, expanded: new Set() };
 
 const MONTHS = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
@@ -50,6 +50,8 @@ async function loadAll() {
   for (const x of [a, c, s, r]) if (x.error) throw x.error;
   S.accounts = a.data; S.cats = c.data; S.subs = s.data;
   S.rules = new Map(r.data.map(x => [x.match_key, x]));
+  const ur = await sb.from('user_rules').select('*').order('sort').order('created_at');
+  S.noUserRules = !!ur.error; S.userRules = ur.error ? [] : ur.data;
   // Buchungen seitenweise laden (Supabase liefert max. 1000 pro Abfrage)
   const all = [];
   for (let from = 0; ; from += 1000) {
@@ -79,6 +81,7 @@ async function repairProcessorRules() {
   bad.forEach(r => S.rules.delete(r.match_key));
   let reset = 0;
   for (const t of S.txs.filter(t => P.isProcessor(t.counterparty_raw) && t.assign_state !== 'manuell')) {
+    if (findUserRule(t)) continue;
     const m = findRule(keyOf(t));
     const patch = { payee: P.displayName(t.counterparty_raw, t.purpose),
       subcategory_id: m?.rule.subcategory_id || null, assign_state: m?.rule.subcategory_id ? m.state : null };
@@ -101,6 +104,17 @@ async function seedDefaults() {
   if (r.error) throw r.error;
   S.cats = cats.sort((a, b) => a.sort - b.sort); S.subs = r.data;
 }
+
+// Eigene Regeln: "enthält"-Bedingung, haben Vorrang
+function ruleMatches(r, t) {
+  if (r.account_id && t.account_id && r.account_id !== t.account_id) return false;
+  if (r.direction === 'ausgabe' && t.amount >= 0) return false;
+  if (r.direction === 'einnahme' && t.amount < 0) return false;
+  const who = `${t.counterparty_raw || ''} ${t.payee || ''}`, why = t.purpose || '';
+  const hay = (r.field === 'empfaenger' ? who : r.field === 'zweck' ? why : who + ' ' + why).toLowerCase();
+  return !!r.pattern && hay.includes(r.pattern.toLowerCase());
+}
+const findUserRule = t => S.userRules.find(r => ruleMatches(r, t));
 
 // Regel finden: exakt = auto, ähnlicher Anfang = Vorschlag
 function findRule(key) {
@@ -166,6 +180,8 @@ async function importFile(file, accountId) {
   let auto = 0, sugg = 0;
   for (const r of [...fresh, ...dups.map(d => d.row)]) {
     r.subcategory_id = null; r.assign_state = null;
+    const ur = findUserRule(r);
+    if (ur) { r.subcategory_id = ur.subcategory_id; r.assign_state = 'auto'; if (ur.payee) r.payee = ur.payee; continue; }
     const m = findRule(keyOf(r));
     if (m && m.rule.subcategory_id) {
       r.subcategory_id = m.rule.subcategory_id; r.assign_state = m.state;
@@ -445,6 +461,7 @@ function viewCats() {
       <button class="btn" id="addCat">Anlegen</button></div>
       <p class="muted">„Umbuchung" (z. B. aufs Sparkonto) zählt weder als Einnahme noch als Ausgabe.</p></div>
     <div class="catgrid">${cards}</div>
+    ${viewUserRules()}
     <div class="card" style="margin-top:16px"><h2>Gelernte Regeln (${rules.length})</h2>
       <p class="muted">Entstehen automatisch, wenn du eine Buchung zuordnest. Löschen = App vergisst diese Zuordnung.</p>
       ${rules.length ? `<div class="tablewrap"><table><thead><tr><th>Erkennung</th><th>Anzeigename</th><th>Kategorie</th><th class="num">Treffer</th><th></th></tr></thead><tbody>
@@ -503,6 +520,85 @@ async function submitNewDialog() {
 $('#newForm').addEventListener('submit', e => { e.preventDefault(); submitNewDialog().catch(fail); });
 $('#ndCancel').onclick = closeNewDialog;
 $('#newDlg').addEventListener('cancel', e => { e.preventDefault(); closeNewDialog(); });
+
+// ---------- Eigene Regeln ----------
+const FIELD_TXT = { alle: 'Empfänger oder Zweck', empfaenger: 'Empfänger', zweck: 'Verwendungszweck' };
+const DIR_TXT = { beide: '', ausgabe: ' · nur Ausgaben', einnahme: ' · nur Einnahmen' };
+function viewUserRules() {
+  if (S.noUserRules) return `<div class="card" style="margin-top:16px"><h2>Eigene Regeln</h2>
+    <p class="neg">Bitte zuerst <code>migrations/003_eigene_regeln.sql</code> im Supabase SQL Editor ausführen und die Seite neu laden.</p></div>`;
+  const rows = S.userRules.map(r => {
+    const s = subById(r.subcategory_id), n = S.txs.filter(t => ruleMatches(r, t)).length;
+    return `<tr><td>${FIELD_TXT[r.field]} enthält „<b>${esc(r.pattern)}</b>"<span class="muted">${DIR_TXT[r.direction]}${r.account_id ? ' · ' + esc(accById(r.account_id)?.name) : ''}</span></td>
+      <td>${s ? esc(catById(s.category_id)?.name + ' › ' + s.name) : '–'}</td><td>${esc(r.payee || '')}</td>
+      <td class="num">${n}</td>
+      <td style="white-space:nowrap"><button class="icon" data-editrule="${r.id}" title="Bearbeiten">✎</button><button class="icon" data-deluserrule="${r.id}" title="Löschen">×</button></td></tr>`;
+  }).join('');
+  return `<div class="card" style="margin-top:16px"><div class="filters"><h2 style="margin:0">Eigene Regeln (${S.userRules.length})</h2>
+      <span class="spacer" style="flex:1"></span><button class="btn" id="addUserRule">+ Regel</button></div>
+    <p class="muted">Haben Vorrang vor gelernten Regeln. Gelten beim Import und werden beim Speichern auf alle nicht manuell zugeordneten Buchungen angewendet.</p>
+    ${rows ? `<div class="tablewrap"><table><thead><tr><th>Bedingung</th><th>Kategorie</th><th>Anzeigename</th><th class="num">Treffer</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}</div>`;
+}
+
+let ruId = null;
+function openRuleDialog(rule = null, prefill = {}) {
+  ruId = rule?.id || null;
+  const r = rule || { field: 'alle', direction: 'beide', account_id: null, payee: '', subcategory_id: null, pattern: '', ...prefill };
+  $('#ruTitle').textContent = rule ? 'Regel bearbeiten' : 'Neue Regel';
+  $('#ruField').value = r.field; $('#ruPattern').value = r.pattern; $('#ruDir').value = r.direction;
+  $('#ruAcc').innerHTML = `<option value="">Alle Konten</option>` + S.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+  $('#ruAcc').value = r.account_id || '';
+  $('#ruSub').innerHTML = subOptions(r.subcategory_id, false).replace('<option value="">– offen –</option>', '<option value="">– Kategorie wählen –</option>');
+  $('#ruPayee').value = r.payee || '';
+  updateRulePreview();
+  $('#ruleDlg').showModal(); $('#ruPattern').focus();
+}
+function ruleFromDialog() {
+  return { field: $('#ruField').value, pattern: $('#ruPattern').value.trim(), direction: $('#ruDir').value,
+    account_id: $('#ruAcc').value || null, subcategory_id: $('#ruSub').value || null, payee: $('#ruPayee').value.trim() || null };
+}
+function updateRulePreview() {
+  const r = ruleFromDialog();
+  if (!r.pattern) { $('#ruPreview').textContent = ''; return; }
+  const hits = S.txs.filter(t => ruleMatches(r, t));
+  const manual = hits.filter(t => t.assign_state === 'manuell').length;
+  const names = [...new Set(hits.map(t => t.payee))].slice(0, 4).join(', ');
+  $('#ruPreview').textContent = hits.length
+    ? `${hits.length} passende Buchung(en)${manual ? `, davon ${manual} manuell zugeordnet (bleiben unverändert)` : ''} – z. B. ${names}`
+    : 'Noch keine passende Buchung – gilt dann für künftige Importe.';
+}
+async function submitRuleDialog() {
+  const r = ruleFromDialog();
+  if (!r.pattern) return $('#ruPattern').focus();
+  if (!r.subcategory_id) { $('#ruSub').focus(); return toast('Bitte Kategorie wählen'); }
+  if (ruId) {
+    const { data, error } = await sb.from('user_rules').update(r).eq('id', ruId).select().single();
+    if (error) throw error;
+    Object.assign(S.userRules.find(x => x.id === ruId), data);
+  } else {
+    const { data, error } = await sb.from('user_rules').insert({ ...r, sort: S.userRules.length }).select().single();
+    if (error) throw error;
+    S.userRules.push(data);
+  }
+  $('#ruleDlg').close(); ruId = null;
+  // Auf vorhandene, nicht manuell zugeordnete Buchungen anwenden
+  const hits = S.txs.filter(t => t.assign_state !== 'manuell' && ruleMatches(r, t));
+  const bySub = hits.filter(t => t.subcategory_id !== r.subcategory_id || t.assign_state === 'vorschlag');
+  await updateTxs(bySub.map(t => t.id), { subcategory_id: r.subcategory_id, assign_state: 'auto' });
+  if (r.payee) await updateTxs(hits.filter(t => t.payee !== r.payee).map(t => t.id), { payee: r.payee });
+  toast(`Regel gespeichert – ${bySub.length} Buchung(en) zugeordnet`);
+  render();
+}
+$('#ruleForm').addEventListener('submit', e => { e.preventDefault(); submitRuleDialog().catch(fail); });
+$('#ruCancel').onclick = () => { $('#ruleDlg').close(); ruId = null; };
+['ruField', 'ruPattern', 'ruDir', 'ruAcc'].forEach(id => $('#' + id).addEventListener('input', updateRulePreview));
+$('#edRule').onclick = () => {
+  const t = S.txs.find(x => x.id === edId); if (!t) return;
+  $('#editDlg').close(); edId = null;
+  const party = P.isProcessor(t.counterparty_raw) ? '' : (t.counterparty_raw || '').split('/')[0].trim();
+  openRuleDialog(null, { field: party ? 'empfaenger' : 'zweck', pattern: party || '', subcategory_id: t.subcategory_id,
+    direction: t.amount < 0 ? 'ausgabe' : 'einnahme' });
+};
 
 // ---------- Buchung bearbeiten ----------
 let edId = null;
@@ -663,6 +759,14 @@ document.addEventListener('click', guard(async e => {
     const { error } = await sb.from('accounts').delete().eq('id', a.id);
     if (error) throw error;
     await loadAll(); return render();
+  }
+  if (b.id === 'addUserRule') return openRuleDialog();
+  if (d.editrule) return openRuleDialog(S.userRules.find(r => r.id === d.editrule));
+  if (d.deluserrule) {
+    if (!confirm('Regel löschen? Bereits zugeordnete Buchungen bleiben zugeordnet.')) return;
+    const { error } = await sb.from('user_rules').delete().eq('id', d.deluserrule);
+    if (error) throw error;
+    S.userRules = S.userRules.filter(r => r.id !== d.deluserrule); return render();
   }
   if (d.delrule) {
     const { error } = await sb.from('rules').delete().eq('id', d.delrule);
