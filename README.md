@@ -29,10 +29,10 @@ Supabase-Zugangsdaten stehen in `public/config.js`.
   - **⬇ CSV** exportiert die aktuell gefilterte Liste (Excel-tauglich).
 - **Jahr**: Kennzahlen mit Vorjahresvergleich (gleicher Zeitraum), Monatstabelle; Betrag anklicken = Buchungen, 📈 = Verlauf.
 - **Vergleich**: Jahresergebnis und Kategorien über alle Jahre, optional nur Jan–aktueller Monat.
-- **Fixkosten**: automatisch erkannte wiederkehrende Ausgaben/Einnahmen/Umbuchungen mit Monats- und Jahressumme, „beendet?"-Hinweis.
+- **Fixkosten**: × blendet einen Posten aus (unten „wieder aufnehmen"). Automatisch erkannte wiederkehrende Ausgaben/Einnahmen/Umbuchungen mit Monats- und Jahressumme, „beendet?"-Hinweis.
 - **Einstellungen**: Konten, Kategorien (Budget pro Monat, Sichtbarkeit je Konto, Sortierung, 📈 Verlauf), eigene und gelernte Regeln, **Daten & Backup** (CSV aller Buchungen, JSON-Komplettbackup).
 - **Zurück**: Browser-Zurück funktioniert überall; nach einem Klick aus Übersicht/Jahr/Fixkosten führt „← Zurück zu …" direkt zurück.
 - **Als App**: Im Browser „Zum Startbildschirm hinzufügen" (iPhone: Teilen-Menü; Android/Chrome: Menü → App installieren).
 
 ## Datenbank-Migrationen
-Neue Funktionen bringen ggf. eine Datei in `migrations/` mit – einmal im Supabase SQL Editor ausführen (001 = `schema.sql`, dann 002–007 der Reihe nach). `schema.sql` enthält immer den Gesamtstand für Neuinstallationen.
+Neue Funktionen bringen ggf. eine Datei in `migrations/` mit – einmal im Supabase SQL Editor ausführen (001 = `schema.sql`, dann 002–008 der Reihe nach). `schema.sql` enthält immer den Gesamtstand für Neuinstallationen.

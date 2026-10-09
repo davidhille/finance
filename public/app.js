@@ -3,7 +3,7 @@ const P = window.FinParser;
 const cfg = window.FIN_CONFIG;
 const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
-const S = { userRules: [], noUserRules: false, dupReview: [], accounts: [], acc: 'alle', cats: [], subs: [], txs: [], rules: new Map(), view: 'home',
+const S = { fxEx: [], noFxEx: false, userRules: [], noUserRules: false, dupReview: [], accounts: [], acc: 'alle', cats: [], subs: [], txs: [], rules: new Map(), view: 'home',
   f: { year: 'alle', month: 'alle', cat: 'offen', sub: '', tag: '', q: '' }, yearSel: null, expanded: new Set(),
   sel: new Set(), from: null, homeMonth: null, showEnded: false };
 const F0 = { year: 'alle', month: 'alle', cat: 'alle', sub: '', tag: '', q: '', ids: null, idsLabel: '' };
@@ -64,6 +64,8 @@ async function loadAll() {
   S.rules = new Map(r.data.map(x => [x.match_key, x]));
   const ur = await sb.from('user_rules').select('*').order('sort').order('created_at');
   S.noUserRules = !!ur.error; S.userRules = ur.error ? [] : ur.data;
+  const fe = await sb.from('fixed_excludes').select('*');
+  S.noFxEx = !!fe.error; S.fxEx = fe.error ? [] : fe.data.map(x => ({ ...x, amount: +x.amount }));
   // Buchungen seitenweise laden (Supabase liefert max. 1000 pro Abfrage)
   const all = [];
   for (let from = 0; ; from += 1000) {
@@ -1013,7 +1015,7 @@ function viewHome() {
     sub: c.budget > 0 ? `${y} bis ${MONTHS[mNum - 1]}: ${eur(ytd.get(c.id) || 0)} von ${eur(c.budget * mNum)}` : '' })).join('');
   const budgetSum = S.cats.filter(c => c.kind === 'ausgabe' && c.budget > 0).reduce((a, c) => a + +c.budget, 0);
   // Fixkosten-Kurzinfo
-  const fx = detectRecurring().filter(x => x.active);
+  const fx = detectRecurring().filter(x => x.active && !x.excluded);
   const fxOut = fx.filter(x => x.kind === 'ausgabe'), fxMonth = fxOut.reduce((a, x) => a + x.perMonth, 0);
   // Tags
   const tagStats = allTags().map(g => { const l = all.filter(t => (t.tags || []).includes(g)); return { g, n: l.length, sum: l.reduce((a, t) => a + t.amount, 0) }; });
@@ -1044,7 +1046,7 @@ function viewHome() {
 const INTERVALS = [['monatlich', 1, 25, 36, 3], ['vierteljährlich', 3, 80, 100, 2], ['halbjährlich', 6, 170, 200, 2], ['jährlich', 12, 345, 390, 2]];
 let fxCache = null;
 function detectRecurring() {
-  const sig = S.acc + '|' + S.txs.length + '|' + S.txs.reduce((a, t) => a + (t.subcategory_id ? 1 : 0), 0);
+  const sig = S.acc + '|' + S.txs.length + '|' + S.txs.reduce((a, t) => a + (t.subcategory_id ? 1 : 0), 0) + '|' + S.fxEx.length;
   if (fxCache?.sig === sig) return fxCache.list;
   const all = scoped(), latest = all.reduce((m, t) => t.booking_date > m ? t.booking_date : m, '0000');
   const latestMs = Date.parse(latest), day = 864e5;
@@ -1081,7 +1083,8 @@ function detectRecurring() {
       const daysSince = (latestMs - Date.parse(lastT.booking_date)) / day;
       const active = daysSince <= iv[1] * 30.5 * 1.5 + 5;
       const next = new Date(Date.parse(lastT.booking_date)); next.setMonth(next.getMonth() + iv[1]);
-      out.push({ id: k + '#' + it[0].id, kind: kindOf(lastT), payee: lastT.payee || lastT.counterparty_raw, account_id: lastT.account_id,
+      const ex = S.fxEx.find(e => e.match_key === k && Math.abs(e.amount - amount) <= e.amount * 0.12 + 0.5);
+      out.push({ id: k + '#' + it[0].id, gk: k, excluded: ex?.id || null, kind: kindOf(lastT), payee: lastT.payee || lastT.counterparty_raw, account_id: lastT.account_id,
         sub: lastT.assign_state !== 'vorschlag' ? lastT.subcategory_id : null, interval: iv[0], months: iv[1], amount,
         perMonth: amount / iv[1], count: it.length, last: lastT.booking_date, next: next.toISOString().slice(0, 10), active, ids: it.map(t => t.id) });
     }
@@ -1091,18 +1094,20 @@ function detectRecurring() {
   return out;
 }
 function viewFix() {
-  const list = detectRecurring(), show = list.filter(x => x.active || S.showEnded);
+  const detected = detectRecurring(), hiddenList = detected.filter(x => x.excluded), list = detected.filter(x => !x.excluded);
+  const show = list.filter(x => x.active || S.showEnded);
   const sec = (kind, title) => {
     const l = show.filter(x => x.kind === kind); if (!l.length) return '';
     const act = l.filter(x => x.active), pm = act.reduce((a, x) => a + x.perMonth, 0);
     return `<div class="card"><div class="filters"><h2 style="margin:0">${title}</h2><span class="spacer" style="flex:1"></span>
         <span><b class="num">${eur(pm)}</b> / Monat · <b class="num">${eur(pm * 12)}</b> / Jahr</span></div>
-      <div class="tablewrap"><table><thead><tr><th>Empfänger</th><th>Kategorie</th><th>Intervall</th><th class="num">Betrag</th><th class="num">pro Monat</th><th class="num">pro Jahr</th><th class="num">zuletzt</th><th class="num">nächste</th><th class="num">Anzahl</th></tr></thead>
+      <div class="tablewrap"><table><thead><tr><th>Empfänger</th><th>Kategorie</th><th>Intervall</th><th class="num">Betrag</th><th class="num">pro Monat</th><th class="num">pro Jahr</th><th class="num">zuletzt</th><th class="num">nächste</th><th class="num">Anzahl</th><th></th></tr></thead>
       <tbody>${l.map(x => { const s = subById(x.sub); return `<tr${x.active ? '' : ' style="opacity:.5"'}>
         <td><button class="linkbtn" data-fixtx="${esc(x.id)}">${esc(x.payee)}</button>${S.acc === 'alle' ? ` <span class="tag">${esc(accById(x.account_id)?.name || '')}</span>` : ''}${x.active ? '' : ' <span class="tag">beendet?</span>'}</td>
         <td class="muted">${s ? esc(catById(s.category_id)?.name + ' › ' + s.name) : '<span class="state offen">offen</span>'}</td>
         <td>${x.interval}</td><td class="num">${eur(x.amount)}</td><td class="num">${eur(x.perMonth)}</td><td class="num">${eur(x.perMonth * 12)}</td>
-        <td class="num muted">${fmtDate(x.last)}</td><td class="num muted">${x.active ? fmtDate(x.next) : '–'}</td><td class="num muted">${x.count}×</td></tr>`; }).join('')}</tbody></table></div></div>`;
+        <td class="num muted">${fmtDate(x.last)}</td><td class="num muted">${x.active ? fmtDate(x.next) : '–'}</td><td class="num muted">${x.count}×</td>
+        <td><button class="icon" data-fxhide="${esc(x.id)}" title="Aus Fixkosten ausblenden">×</button></td></tr>`; }).join('')}</tbody></table></div></div>`;
   };
   const out = list.filter(x => x.active && x.kind === 'ausgabe').reduce((a, x) => a + x.perMonth, 0);
   const inc = list.filter(x => x.active && x.kind === 'einnahme').reduce((a, x) => a + x.perMonth, 0);
@@ -1121,7 +1126,12 @@ function viewFix() {
     </div>
     <p class="muted" style="margin:10px 0 0;font-size:12px">Automatisch erkannt: gleicher Empfänger, ähnlicher Betrag (±12 %), regelmäßiger Abstand (monatlich, vierteljährlich, halbjährlich, jährlich). „beendet?" = zuletzt deutlich länger als ein Intervall her. Name anklicken = zugehörige Buchungen.</p></div>
     ${sec('ausgabe', 'Regelmäßige Ausgaben')}${sec('einnahme', 'Regelmäßige Einnahmen')}${sec('umbuchung', 'Regelmäßige Umbuchungen')}
-    ${show.length ? '' : '<div class="card muted">Noch keine wiederkehrenden Zahlungen erkannt – dafür braucht es einige Monate an Buchungen.</div>'}`;
+    ${show.length ? '' : '<div class="card muted">Noch keine wiederkehrenden Zahlungen erkannt – dafür braucht es einige Monate an Buchungen.</div>'}
+    ${S.noFxEx ? '<div class="card muted">Zum Ausblenden einzelner Posten bitte <code>migrations/008_fixkosten_ausblenden.sql</code> in Supabase ausführen.</div>' : ''}
+    ${hiddenList.length ? `<div class="card"><h2>Ausgeblendet (${hiddenList.length})</h2>
+      <p class="muted" style="margin-top:-6px">Zählen nicht zu den Fixkosten. Neue Zahlungen desselben Empfängers mit ähnlichem Betrag bleiben ausgeblendet.</p>
+      <div class="sublist">${hiddenList.map(x => `<div class="subrow"><span class="n">${esc(x.payee)} <span class="muted">· ${x.interval} · ${eur(x.amount)}</span></span>
+        <button class="ghost small" data-fxshow="${x.excluded}">wieder aufnehmen</button></div>`).join('')}</div></div>` : ''}`;
 }
 
 // ---------- Verlauf pro Kategorie ----------
@@ -1312,6 +1322,18 @@ document.addEventListener('click', guard(async e => {
   if (d.hometx) return go('tx', { f: { cat: d.hometx, year: S.homeMonth.slice(0, 4), month: String(+S.homeMonth.slice(5)) }, from: fromLabel() });
   if (d.tagf) return go('tx', { f: { tag: d.tagf }, from: fromLabel() });
   if (d.fixtx) { const x = detectRecurring().find(x => x.id === d.fixtx); return x && go('tx', { f: { ids: x.ids, idsLabel: `Fixkosten: ${x.payee}` }, from: fromLabel() }); }
+  if (d.fxhide) {
+    const x = detectRecurring().find(x => x.id === d.fxhide); if (!x) return;
+    if (S.noFxEx) return toast('Bitte zuerst migrations/008_fixkosten_ausblenden.sql in Supabase ausführen');
+    const { data, error } = await sb.from('fixed_excludes').insert({ match_key: x.gk, amount: x.amount, label: x.payee }).select().single();
+    if (error) throw error;
+    S.fxEx.push({ ...data, amount: +data.amount }); fxCache = null; toast(`${x.payee} ausgeblendet`); return render();
+  }
+  if (d.fxshow) {
+    const { error } = await sb.from('fixed_excludes').delete().eq('id', d.fxshow);
+    if (error) throw error;
+    S.fxEx = S.fxEx.filter(e => e.id !== d.fxshow); fxCache = null; toast('Wieder aufgenommen'); return render();
+  }
   if ('clearids' in d) { S.f.ids = null; S.f.idsLabel = ''; return render(); }
   if (b.id === 'csvFiltered') return exportCsv(filteredTxs(), `buchungen-${stamp()}.csv`);
   if (b.id === 'csvAll') return exportCsv(S.txs, `buchungen-alle-${stamp()}.csv`);
