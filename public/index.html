@@ -52,6 +52,8 @@ table{border-collapse:collapse;width:100%}
 th,td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
 th{text-align:left;font-weight:500;color:var(--muted);font-size:12px;white-space:nowrap}
 tr.sub td:first-child{padding-left:26px;color:var(--muted)}
+tr.subsub td:first-child{padding-left:46px;color:var(--muted);font-size:12px}
+tr.subsub td{font-size:12px}
 tr.cat td{font-weight:600}
 tr.total td{font-weight:600;border-top:2px solid var(--ink)}
 tr.clickable{cursor:pointer}
@@ -173,6 +175,9 @@ input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
 .trend{font-size:13px}
 /* Jahrestabelle: erste Spalte fixieren */
 .ytable td:first-child,.ytable th:first-child{position:sticky;left:0;background:var(--panel);z-index:1}
+.ytable td:first-child{white-space:nowrap}
+.ytable td:first-child .icon{display:inline-block;vertical-align:middle}
+@media (min-width:721px){.bulkbar{flex-wrap:nowrap;white-space:nowrap}}
 /* Mobile: Buchungen als Karten */
 @media (max-width:440px){ .topbar h1 .ttl{display:none} }
 @media (max-width:720px){

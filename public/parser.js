@@ -40,9 +40,15 @@
 
   // Schlüssel für das Regel-Lernen: robust gegen Filialnummern, Orte, Satzzeichen
   const NOISE = new Set(['gmbh', 'co', 'kg', 'ag', 'se', 'ohg', 'ug', 'ev', 'e', 'v', 'sagt', 'danke', 'filiale', 'fil', 'markt', 'py', 'sumup', 'zettle', 'izettle']);
+  // ä/ae, ö/oe, ü/ue, ß/ss, é/e … gelten als gleich (DKB schreibt Händler mal so, mal so)
+  function fold(s) {
+    return (s || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  }
+  const normKey = k => fold(k).replace(/[^a-z ]+/g, ' ').replace(/\s+/g, ' ').trim();
   function matchKey(raw) {
-    let s = (raw || '').toLowerCase().split('/')[0];
-    s = s.replace(/[^a-zäöüß ]+/g, ' ').replace(/\s+/g, ' ').trim();
+    let s = fold((raw || '').split('/')[0]);
+    s = s.replace(/[^a-z ]+/g, ' ').replace(/\s+/g, ' ').trim();
     const tokens = s.split(' ').filter(t => t.length > 1 && !NOISE.has(t));
     return tokens.slice(0, 3).join(' ');
   }
@@ -126,6 +132,6 @@
     return { rows, skippedPending };
   }
 
-  const api = { decode, parseDKB, matchKey, keyFor, prettyPayee, displayName, isProcessor, parseAmount, parseDate };
+  const api = { decode, parseDKB, matchKey, normKey, keyFor, prettyPayee, displayName, isProcessor, parseAmount, parseDate };
   if (typeof module !== 'undefined') module.exports = api; else root.FinParser = api;
 })(this);

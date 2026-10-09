@@ -62,7 +62,9 @@ async function loadAll() {
   ]);
   for (const x of [a, c, s, r]) if (x.error) throw x.error;
   S.accounts = a.data; S.cats = c.data; S.subs = s.data; sortSubs();
-  S.rules = new Map(r.data.map(x => [x.match_key, x]));
+  S.rules = new Map();
+  for (const x of r.data) { const k = P.normKey(x.match_key), o = S.rules.get(k); if (!o || (!o.subcategory_id && x.subcategory_id) || x.hits > o.hits) S.rules.set(k, x); }
+  migrateRuleKeys(r.data).catch(e => console.warn('Regel-Schlüssel', e));
   const ur = await sb.from('user_rules').select('*').order('sort').order('created_at');
   S.noUserRules = !!ur.error; S.userRules = ur.error ? [] : ur.data;
   const fe = await sb.from('fixed_excludes').select('*');
@@ -84,6 +86,16 @@ async function loadAll() {
   }
   if (S.acc !== 'alle' && !accById(S.acc)) S.acc = 'alle';
   await repairProcessorRules();
+}
+
+// Alte Regel-Schlüssel (mit ä/ö/ü/ß) auf die neue Schreibweise umstellen, Doppelte zusammenführen
+async function migrateRuleKeys(rows) {
+  for (const x of rows) {
+    const k = P.normKey(x.match_key); if (k === x.match_key) continue;
+    const keep = S.rules.get(k);
+    if (keep === x) { const { error } = await sb.from('rules').update({ match_key: k }).eq('id', x.id); if (!error) x.match_key = k; }
+    else await sb.from('rules').delete().eq('id', x.id);
+  }
 }
 
 // Einmalige Reparatur: Sammelregeln für Zahlungsdienste (z. B. "paypal europe ...") entfernen
@@ -203,6 +215,7 @@ async function importFile(file, accountId) {
     const ur = findUserRule(r);
     if (ur && subAllowed(ur.subcategory_id, accountId)) { r.subcategory_id = ur.subcategory_id; r.assign_state = 'auto'; if (ur.payee) r.payee = ur.payee; continue; }
     const m = findRule(keyOf(r));
+    if (m?.state === 'auto' && m.rule.payee) r.payee = m.rule.payee;
     if (m && m.rule.subcategory_id && subAllowed(m.rule.subcategory_id, accountId)) {
       r.subcategory_id = m.rule.subcategory_id; r.assign_state = m.state;
       if (m.state === 'auto' && m.rule.payee) r.payee = m.rule.payee;
@@ -394,12 +407,25 @@ function viewTx() {
     </div>
     <div class="listhead"><span class="muted">${list.length} Buchungen · Summe <b class="num ${sign(sum)}">${eur(sum)}</b></span>
       <span class="spacer" style="flex:1"></span>
+      <button class="ghost small" data-view="payees" title="Alle Empfänger mit Summen, Schreibweisen zusammenfassen">Empfänger</button>
       <button class="ghost small" id="csvFiltered" title="Diese Liste als CSV (Excel) herunterladen"${list.length ? '' : ' disabled'}>⬇ CSV</button></div>
     ${list.length ? `<div class="tablewrap"><table class="txt">
       <thead><tr><th class="c-sel"><input type="checkbox" id="selAll" title="Alle sichtbaren auswählen"></th><th>Datum</th>${S.acc === 'alle' ? '<th>Konto</th>' : ''}<th>Empfänger / Auftraggeber</th><th>Verwendungszweck</th><th class="num">Betrag</th><th>Kategorie</th><th></th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>${list.length > 600 ? '<p class="muted">Die ersten 600 werden angezeigt – Filter eingrenzen.</p>' : ''}`
       : `<p class="muted">${S.f.cat === 'offen' ? 'Alles zugeordnet. 👌' : 'Keine Buchungen für diesen Filter.'}</p>`}
   </div>`;
+}
+
+// Empfänger einer Unterkategorie in einem Jahr (Monatswerte), größte zuerst
+function payeeRows(year, subId) {
+  const m = new Map();
+  for (const t of scoped()) {
+    if (t.subcategory_id !== subId || t.assign_state === 'vorschlag' || +t.booking_date.slice(0, 4) !== year) continue;
+    const n = t.payee || t.counterparty_raw || '–';
+    if (!m.has(n)) m.set(n, Array(12).fill(0));
+    m.get(n)[+t.booking_date.slice(5, 7) - 1] += t.amount;
+  }
+  return [...m.entries()].map(([name, arr]) => ({ name, arr })).sort((a, b) => Math.abs(total(b.arr)) - Math.abs(total(a.arr)));
 }
 
 // Summen je Unterkategorie × Monat für ein Jahr
@@ -482,7 +508,12 @@ function viewYear() {
       sec = add(sec, cs);
       const open = S.expanded.has(c.id);
       rowsHtml += line('cat clickable', `${open ? '▾' : '▸'} ${esc(c.name)} <button class="icon trend" data-trend="cat:${c.id}" title="Verlauf" aria-label="Verlauf">${IC_TREND}</button>`, cs, `data-exp="${c.id}"`, c.id);
-      if (open) subs.forEach(s => { if (agg.has(s.id)) rowsHtml += line('sub', `${esc(s.name)} <button class="icon trend" data-trend="sub:${s.id}" title="Verlauf" aria-label="Verlauf">${IC_TREND}</button>`, agg.get(s.id), '', 'sub:' + s.id); });
+      if (open) subs.forEach(s => {
+        if (!agg.has(s.id)) return;
+        const so = S.expanded.has('sub:' + s.id);
+        rowsHtml += line('sub clickable', `${so ? '▾' : '▸'} ${esc(s.name)} <button class="icon trend" data-trend="sub:${s.id}" title="Verlauf" aria-label="Verlauf">${IC_TREND}</button>`, agg.get(s.id), `data-exp="sub:${s.id}"`, 'sub:' + s.id);
+        if (so) payeeRows(year, s.id).forEach(p => { rowsHtml += line('subsub', esc(p.name), p.arr, '', 'pay:' + s.id + ':' + encodeURIComponent(p.name)); });
+      });
     }
     const none = kind === 'umbuchung' ? null : agg.get(flip < 0 ? 'none-' : 'none+');
     if (none) { sec = add(sec, none); rowsHtml += line('cat', '<span class="state offen">nicht zugeordnet</span>', none, '', 'offen'); }
@@ -900,6 +931,63 @@ async function submitEditDialog() {
 $('#editForm').addEventListener('submit', e => { e.preventDefault(); submitEditDialog().catch(fail); });
 $('#edCancel').onclick = () => { $('#editDlg').close(); edId = null; };
 
+// ---------- Empfänger: Übersicht & Zusammenfassen ----------
+S.psel = new Set(); S.pq = ''; S.pcat = '';
+function payeeStats(list) {
+  const m = new Map();
+  for (const t of list) {
+    const name = t.payee || t.counterparty_raw || '–';
+    if (!m.has(name)) m.set(name, { name, n: 0, sum: 0, last: '', raws: new Set(), subs: new Map(), ids: [] });
+    const x = m.get(name);
+    x.n++; x.sum += t.amount; x.ids.push(t.id); x.raws.add(t.counterparty_raw);
+    if (t.booking_date > x.last) x.last = t.booking_date;
+    if (t.subcategory_id && t.assign_state !== 'vorschlag') x.subs.set(t.subcategory_id, (x.subs.get(t.subcategory_id) || 0) + 1);
+  }
+  return [...m.values()].map(x => ({ ...x, sub: [...x.subs.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null }));
+}
+function viewPayees() {
+  const q = S.pq.toLowerCase();
+  let list = payeeStats(scoped());
+  if (S.pcat) list = list.filter(x => S.pcat.startsWith('sub:') ? x.subs.has(S.pcat.slice(4)) : [...x.subs.keys()].some(id => subById(id)?.category_id === S.pcat));
+  if (q) list = list.filter(x => (x.name + ' ' + [...x.raws].join(' ')).toLowerCase().includes(q));
+  list.sort((a, b) => Math.abs(b.sum) - Math.abs(a.sum));
+  const rows = list.slice(0, 500).map(x => { const s = subById(x.sub); return `<tr>
+    <td class="c-sel"><input type="checkbox" data-psel="${esc(x.name)}"${S.psel.has(x.name) ? ' checked' : ''}></td>
+    <td><button class="linkbtn" data-paytx="${esc(x.name)}">${esc(x.name)}</button>${x.raws.size > 1 ? ` <span class="tag" title="${esc([...x.raws].join(' · '))}">${x.raws.size} Schreibweisen</span>` : ''}</td>
+    <td class="muted">${s ? esc(catById(s.category_id)?.name + ' › ' + s.name) : '<span class="state offen">offen</span>'}</td>
+    <td class="num">${x.n}</td><td class="num ${sign(x.sum)}">${eur(x.sum)}</td><td class="num muted">${fmtDate(x.last)}</td>
+    <td><button class="icon" data-prename="${esc(x.name)}" title="Umbenennen">✎</button></td></tr>`; }).join('');
+  const catOpts = S.cats.map(c => `<option value="${c.id}"${S.pcat === c.id ? ' selected' : ''}>${esc(c.name)}</option>` +
+    S.subs.filter(x => x.category_id === c.id).map(x => `<option value="sub:${x.id}"${S.pcat === 'sub:' + x.id ? ' selected' : ''}>&nbsp;&nbsp;› ${esc(x.name)}</option>`).join('')).join('');
+  return `<div class="card"><div class="filters"><h2 style="margin:0">Empfänger</h2>
+      <select id="pCat"><option value="">Alle Kategorien</option>${catOpts}</select>
+      <input id="pQ" placeholder="Empfänger suchen…" value="${esc(S.pq)}" style="min-width:200px">
+      <span class="spacer" style="flex:1"></span><span class="muted">${list.length} Empfänger</span></div>
+    <p class="muted" style="margin-top:-4px">Mehrere anhaken → <b>Zusammenfassen</b> unter einem Namen (z. B. verschiedene Schreibweisen desselben Ladens). Der Originaltext bleibt erhalten; künftige Importe bekommen automatisch den neuen Namen.</p>
+    ${rows ? `<div class="tablewrap"><table><thead><tr><th class="c-sel"></th><th>Empfänger</th><th>Häufigste Kategorie</th><th class="num">Anzahl</th><th class="num">Summe</th><th class="num">zuletzt</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">Keine Empfänger gefunden.</p>'}</div>`;
+}
+function renderPayeeBar() {
+  const bar = $('#bulkbar');
+  if (S.view !== 'payees' || !S.psel.size) { if (S.view === 'payees') { bar.classList.add('hidden'); bar.innerHTML = ''; } return; }
+  const names = [...S.psel];
+  const counts = new Map(); S.txs.forEach(t => { if (S.psel.has(t.payee)) counts.set(t.payee, (counts.get(t.payee) || 0) + 1); });
+  const best = names.slice().sort((a, b) => (counts.get(b) || 0) - (counts.get(a) || 0))[0];
+  bar.innerHTML = `<b>${names.length} ausgewählt</b><span>Zusammenfassen als</span>
+    <input id="pMergeName" value="${esc(best)}" style="width:220px"><button class="btn small" id="pMerge"${names.length < 1 ? ' disabled' : ''}>Zusammenfassen</button>
+    <button class="ghost" id="pClear" title="Auswahl aufheben">✕</button>`;
+  bar.classList.remove('hidden');
+}
+async function mergePayees(names, newName) {
+  newName = newName.trim(); if (!newName) return toast('Bitte Namen eingeben');
+  const hit = S.txs.filter(t => names.includes(t.payee || t.counterparty_raw));
+  await updateTxs(hit.filter(t => t.payee !== newName).map(t => t.id), { payee: newName });
+  // Gelernte Regeln merken sich den Namen → künftige Importe heißen gleich
+  const keys = [...new Set(hit.map(keyOf).filter(Boolean))];
+  for (const k of keys) await saveRule(k, { payee: newName, hits: S.rules.get(k)?.hits || 0 });
+  S.psel.clear(); fxCache = null;
+  toast(`${hit.length} Buchung(en) heißen jetzt „${newName}"`); render();
+}
+
 // ---------- Navigation (Zurück-Taste, Verlauf) ----------
 function snapshot() { return { view: S.view, f: { ...S.f }, yearSel: S.yearSel, from: S.from, homeMonth: S.homeMonth }; }
 function go(view, opts = {}) {
@@ -921,14 +1009,14 @@ window.addEventListener('popstate', e => {
 // Adresse direkt geändert (z. B. Lesezeichen, #tx eingetippt)
 window.addEventListener('hashchange', () => {
   const h = location.hash.slice(1);
-  if (h !== S.view && ['home', 'tx', 'year', 'compare', 'fix', 'cats', 'import'].includes(h) && !history.state?.view) {
+  if (h !== S.view && ['home', 'tx', 'year', 'compare', 'fix', 'cats', 'import', 'payees'].includes(h) && !history.state?.view) {
     S.view = h; S.from = null; S.sel.clear();
     try { history.replaceState(snapshot(), '', '#' + h); } catch {}
     render();
   }
 });
 const backBar = () => S.from ? `<div class="backbar"><button data-back>← ${esc(S.from)}</button></div>` : '';
-const FROM = { home: 'Zurück zur Übersicht', year: () => `Zurück zur Jahresübersicht ${S.yearSel}`, cats: 'Zurück zu Einstellungen', fix: 'Zurück zu Fixkosten', compare: 'Zurück zum Vergleich' };
+const FROM = { payees: 'Zurück zu Empfänger', home: 'Zurück zur Übersicht', year: () => `Zurück zur Jahresübersicht ${S.yearSel}`, cats: 'Zurück zu Einstellungen', fix: 'Zurück zu Fixkosten', compare: 'Zurück zum Vergleich' };
 const fromLabel = () => { const f = FROM[S.view]; return typeof f === 'function' ? f() : f || null; };
 
 // ---------- Tags ----------
@@ -938,6 +1026,7 @@ const parseTags = v => [...new Set((v || '').split(',').map(x => x.trim().replac
 // ---------- Mehrfachauswahl ----------
 function renderBulk() {
   const bar = $('#bulkbar');
+  if (S.view === 'payees') return;
   if (S.view !== 'tx' || !S.sel.size) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
   const sel = S.txs.filter(t => S.sel.has(t.id)), sum = sel.reduce((a, t) => a + t.amount, 0);
   bar.innerHTML = `<b>${sel.length} ausgewählt</b><span class="num">${eur(sum)}</span>
@@ -1060,6 +1149,7 @@ function viewHome() {
 // ---------- Fixkosten & Abos ----------
 const INTERVALS = [['monatlich', 1, 25, 36, 3], ['vierteljährlich', 3, 80, 100, 2], ['halbjährlich', 6, 170, 200, 2], ['jährlich', 12, 345, 390, 2]];
 let fxCache = null;
+const fxNorm = k => { const [a, ...rest] = k.split('|'); return [a.startsWith('p:') ? 'p:' + P.normKey(a.slice(2)) : P.normKey(a), ...rest].join('|'); };
 function detectRecurring() {
   const sig = S.acc + '|' + S.txs.length + '|' + S.txs.reduce((a, t) => a + (t.subcategory_id ? 1 : 0), 0) + '|' + S.fxEx.length;
   if (fxCache?.sig === sig) return fxCache.list;
@@ -1069,7 +1159,7 @@ function detectRecurring() {
   const groups = new Map();
   for (const t of all) {
     if (kindOf(t) === 'umbuchung' && !t.subcategory_id) continue;
-    const k = (keyOf(t) || 'p:' + (t.payee || '').toLowerCase()) + '|' + t.account_id + '|' + (t.amount < 0 ? '-' : '+');
+    const k = (keyOf(t) || 'p:' + P.normKey(t.payee || '')) + '|' + t.account_id + '|' + (t.amount < 0 ? '-' : '+');
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(t);
   }
@@ -1098,7 +1188,7 @@ function detectRecurring() {
       const daysSince = (latestMs - Date.parse(lastT.booking_date)) / day;
       const active = daysSince <= iv[1] * 30.5 * 1.5 + 5;
       const next = new Date(Date.parse(lastT.booking_date)); next.setMonth(next.getMonth() + iv[1]);
-      const ex = S.fxEx.find(e => e.match_key === k && Math.abs(e.amount - amount) <= e.amount * 0.12 + 0.5);
+      const ex = S.fxEx.find(e => fxNorm(e.match_key) === fxNorm(k) && Math.abs(e.amount - amount) <= e.amount * 0.12 + 0.5);
       out.push({ id: k + '#' + it[0].id, gk: k, excluded: ex?.id || null, kind: kindOf(lastT), payee: lastT.payee || lastT.counterparty_raw, account_id: lastT.account_id,
         sub: lastT.assign_state !== 'vorschlag' ? lastT.subcategory_id : null, interval: iv[0], months: iv[1], amount,
         perMonth: amount / iv[1], count: it.length, last: lastT.booking_date, next: next.toISOString().slice(0, 10), active, ids: it.map(t => t.id) });
@@ -1184,6 +1274,12 @@ function drawTrend() {
   $('#trYears').innerHTML = ys.length ? `<table><thead><tr><th>Jahr</th>${ys.map(y => `<th class="num">${y}</th>`).join('')}</tr></thead><tbody>
     <tr><td>Summe</td>${ys.map(y => `<td class="num">${eur(byY.get(y))}</td>`).join('')}</tr>
     <tr><td class="muted">Ø Monat</td>${ys.map(y => `<td class="num muted">${eur(byY.get(y) / (lastMonthOf(+y) || 12))}</td>`).join('')}</tr></tbody></table>` : '<p class="muted">Keine Buchungen.</p>';
+  // Top-Empfänger im gewählten Zeitraum
+  const inRange = all.filter(t => match(t) && ymOf(t.booking_date) >= first && ymOf(t.booking_date) <= last);
+  const top = payeeStats(inRange).map(x => ({ ...x, v: flip * x.sum })).sort((a, b) => b.v - a.v).slice(0, 10);
+  const tot = top.reduce((a, x) => a + x.v, 0) || 1, all2 = inRange.reduce((a, t) => a + flip * t.amount, 0) || 1;
+  $('#trYears').innerHTML += top.length ? `<h2 style="margin:16px 0 8px">Top-Empfänger <span class="muted" style="font-weight:400;font-size:12px">${$('#trRange').selectedOptions[0].text}</span></h2>
+    <div class="bars">${top.map(x => barRow({ label: esc(x.name), value: x.v, max: top[0].v, click: `data-trpay="${esc(x.name)}"`, sub: `${x.n}× · ${pct(x.v / all2)} Anteil` })).join('')}</div>` : '';
 }
 $('#trRange').addEventListener('change', drawTrend);
 $('#trendDlg').addEventListener('close', () => { if (trChart) { trChart.destroy(); trChart = null; } });
@@ -1239,13 +1335,13 @@ function render() {
   $('#accSel').innerHTML = `<option value="alle">Alle Konten</option>` + S.accounts.map(a => `<option value="${a.id}"${a.id === S.acc ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
   if (S.acc === 'alle') $('#accSel').value = 'alle';
   document.querySelectorAll('[data-view="import"]').forEach(b => b.classList.toggle('active', S.view === 'import'));
-  const v = { home: viewHome, import: viewImport, tx: viewTx, year: viewYear, compare: viewCompare, fix: viewFix, cats: viewCats }[S.view] || viewHome;
+  const v = { home: viewHome, import: viewImport, tx: viewTx, year: viewYear, compare: viewCompare, fix: viewFix, cats: viewCats, payees: viewPayees }[S.view] || viewHome;
   $('#view').innerHTML = backBar() + v();
   $('#tagList').innerHTML = allTags().map(g => `<option value="${esc(g)}">`).join('');
   if (S.view === 'compare') drawCompareChart();
   if (S.view === 'cats') masonry();
   if (S.view === 'import') bindImport();
-  renderBulk();
+  renderBulk(); renderPayeeBar();
 }
 
 function bindImport() {
@@ -1303,6 +1399,8 @@ document.addEventListener('change', guard(async e => {
   if (t.id === 'selAll') { document.querySelectorAll('[data-selid]').forEach(cb => { cb.checked = t.checked; t.checked ? S.sel.add(cb.dataset.selid) : S.sel.delete(cb.dataset.selid); }); return renderBulk(); }
   if (t.dataset.budget) return saveBudget(t.dataset.budget, t.value);
   if (t.id === 'fxEnded') { S.showEnded = t.checked; return render(); }
+  if (t.dataset.psel !== undefined) { t.checked ? S.psel.add(t.dataset.psel) : S.psel.delete(t.dataset.psel); return renderPayeeBar(); }
+  if (t.id === 'pCat') { S.pcat = t.value; return render(); }
   if (t.id === 'ySel') { S.yearSel = +t.value; return render(); }
   if (t.id === 'cmpYtd') { S.cmpYtd = t.checked; return render(); }
   if (t.id === 'accSel') { S.acc = t.value; S.sel.clear(); try { localStorage.setItem('fin_acc', S.acc); } catch {} return render(); }
@@ -1310,12 +1408,18 @@ document.addEventListener('change', guard(async e => {
 }));
 
 document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.id === 'pMergeName') { e.preventDefault(); mergePayees([...S.psel], e.target.value).catch(fail); }
   if (e.key === 'Enter' && (e.target.dataset.payee || e.target.dataset.budget)) e.target.blur();
   if (e.key === 'Enter' && e.target.id === 'bulkTag') { e.preventDefault(); bulkTag().catch(fail); }
 });
 
 let qTimer;
 document.addEventListener('input', e => {
+  if (e.target.id === 'pQ') {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => { S.pq = e.target.value; render(); const q = $('#pQ'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 250);
+    return;
+  }
   if (e.target.id !== 'fQ') return;
   clearTimeout(qTimer);
   qTimer = setTimeout(() => { S.f.q = e.target.value; render(); const q = $('#fQ'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 250);
@@ -1325,12 +1429,22 @@ document.addEventListener('click', guard(async e => {
   const dr = e.target.closest('td[data-drill]');
   if (dr) {
     const [key, m] = dr.dataset.drill.split('|');
+    if (key.startsWith('pay:')) {
+      const [, subId, ...nm] = key.split(':'), name = decodeURIComponent(nm.join(':'));
+      const ids = scoped().filter(t => t.subcategory_id === subId && (t.payee || t.counterparty_raw || '–') === name && t.assign_state !== 'vorschlag'
+        && +t.booking_date.slice(0, 4) === S.yearSel && (m === '0' || +t.booking_date.slice(5, 7) === +m)).map(t => t.id);
+      return go('tx', { f: { ids, idsLabel: `${name} · ${m === '0' ? S.yearSel : MONTHS[m - 1] + ' ' + S.yearSel}` }, from: fromLabel() });
+    }
     return go('tx', { f: { year: String(S.yearSel), month: m === '0' ? 'alle' : m, cat: key }, from: fromLabel() });
   }
   const b = e.target.closest('button, tr[data-exp]'); if (!b) return;
   const d = b.dataset;
   if ('back' in d) return history.back();
   if (d.trend) { e.stopPropagation(); return openTrend(d.trend); }
+  if (d.trpay) {
+    const x = payeeStats(scoped()).find(x => x.name === d.trpay); $('#trendDlg').close();
+    return x && go('tx', { f: { ids: x.ids, idsLabel: `Empfänger: ${x.name}` }, from: fromLabel() });
+  }
   if (d.view) return go(d.view);
   if (d.jump) return document.getElementById(d.jump)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   if (d.hm) { S.homeMonth = ymAdd(S.homeMonth, +d.hm); try { history.replaceState(snapshot(), '', '#home'); } catch {} return render(); }
@@ -1350,6 +1464,10 @@ document.addEventListener('click', guard(async e => {
     if (error) throw error;
     S.fxEx = S.fxEx.filter(e => e.id !== d.fxshow); fxCache = null; toast('Wieder aufgenommen'); return render();
   }
+  if (b.id === 'pMerge') return mergePayees([...S.psel], $('#pMergeName').value);
+  if (b.id === 'pClear') { S.psel.clear(); return render(); }
+  if (d.prename) { const n = prompt('Neuer Name für alle Buchungen von „' + d.prename + '"', d.prename); return n && n.trim() !== d.prename ? mergePayees([d.prename], n) : null; }
+  if (d.paytx) { const x = payeeStats(scoped()).find(x => x.name === d.paytx); return x && go('tx', { f: { ids: x.ids, idsLabel: `Empfänger: ${x.name}` }, from: fromLabel() }); }
   if ('clearids' in d) { S.f.ids = null; S.f.idsLabel = ''; return render(); }
   if (b.id === 'csvFiltered') return exportCsv(filteredTxs(), `buchungen-${stamp()}.csv`);
   if (b.id === 'csvAll') return exportCsv(S.txs, `buchungen-alle-${stamp()}.csv`);
@@ -1454,7 +1572,7 @@ async function start() {
   try { S.acc = localStorage.getItem('fin_acc') || 'alle'; } catch {}
   try { await loadAll(); } catch (e) { return fail(e); }
   const h = location.hash.slice(1);
-  S.view = ['home', 'tx', 'year', 'compare', 'fix', 'cats', 'import'].includes(h) ? h : S.txs.length ? 'home' : 'import';
+  S.view = ['home', 'tx', 'year', 'compare', 'fix', 'cats', 'import', 'payees'].includes(h) ? h : S.txs.length ? 'home' : 'import';
   try { history.replaceState(snapshot(), '', '#' + S.view); } catch {}
   render();
 }
