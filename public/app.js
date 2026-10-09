@@ -474,7 +474,9 @@ function viewCats() {
       <button class="btn" id="addCat">Anlegen</button></div>
       <p class="muted">„Umbuchung" (z. B. aufs Sparkonto) zählt weder als Einnahme noch als Ausgabe.</p></div>
     <div class="catgrid">${cards}</div>
-    ${hidden.length ? `<p class="muted" style="margin-top:8px">Für „${esc(accById(S.acc)?.name)}" ausgeblendet: ${hidden.map(c => `${esc(c.name)} <span class="kind">(${scopeTxt(c)})</span>`).join(', ')} – sichtbar unter „Alle Konten".</p>` : ''}
+    ${hidden.length ? `<div class="card" style="margin-top:16px"><h2>Für „${esc(accById(S.acc)?.name)}" ausgeblendet (${hidden.length})</h2>
+      <p class="muted" style="margin-top:-6px">Diese Kategorien gelten nur für ein anderes Konto. Zum Einblenden auf „alle Konten" oder dieses Konto stellen.</p>
+      <div class="filters">${hidden.map(c => `<span class="chip" style="padding-right:6px">${esc(c.name)} ${scopeSel(c)}</span>`).join('')}</div></div>` : ''}
     ${viewUserRules()}
     <div class="card" style="margin-top:16px"><h2>Gelernte Regeln (${rules.length})</h2>
       <p class="muted">Entstehen automatisch, wenn du eine Buchung zuordnest. Löschen = App vergisst diese Zuordnung.</p>
