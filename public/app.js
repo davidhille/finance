@@ -427,9 +427,14 @@ function drawCompareChart() {
 }
 
 function viewCats() {
-  const cards = S.cats.map(c => `<div class="card"><h2>${esc(c.name)}<span class="kind">${c.kind}</span>
+  // Anzahl Buchungen je Unterkategorie (im gewählten Konto, ohne offene Vorschläge)
+  const cnt = new Map();
+  scoped().forEach(t => { if (t.subcategory_id && t.assign_state !== 'vorschlag') cnt.set(t.subcategory_id, (cnt.get(t.subcategory_id) || 0) + 1); });
+  const catCnt = c => S.subs.filter(s => s.category_id === c.id).reduce((a, s) => a + (cnt.get(s.id) || 0), 0);
+  const badge = (n, filter) => `<button class="count${n ? '' : ' zero'}" data-showtx="${filter}" title="Buchungen anzeigen"${n ? '' : ' disabled'}>${n}</button>`;
+  const cards = S.cats.map(c => `<div class="card"><h2>${esc(c.name)} ${badge(catCnt(c), c.id)}<span class="kind">${c.kind}</span>
       <button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button></h2>
-      ${S.subs.filter(s => s.category_id === c.id).map(s => `<span class="chip">${esc(s.name)}<button class="icon" data-rensub="${s.id}">✎</button><button class="icon" data-delsub="${s.id}">×</button></span>`).join('')}
+      ${S.subs.filter(s => s.category_id === c.id).map(s => `<span class="chip">${esc(s.name)} ${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}<button class="icon" data-rensub="${s.id}">✎</button><button class="icon" data-delsub="${s.id}">×</button></span>`).join('')}
       <div style="margin-top:8px"><button class="ghost" data-addsub="${c.id}">+ Unterkategorie</button></div></div>`).join('');
   const rules = [...S.rules.values()].filter(r => r.subcategory_id).sort((a, b) => a.match_key.localeCompare(b.match_key));
   const accCard = `<div class="card"><div class="filters"><h2 style="margin:0">Konten</h2>
@@ -605,6 +610,7 @@ document.addEventListener('click', guard(async e => {
   if (d.ok) { const t = S.txs.find(x => x.id === d.ok); return setCategory(t.id, t.subcategory_id); }
   if (d.del) return deleteTx(d.del);
   if (d.edit) return openEditDialog(d.edit);
+  if (d.showtx) { S.view = 'tx'; S.f = { year: 'alle', month: 'alle', cat: d.showtx, q: '' }; return render(); }
   if (d.dupimp) return resolveDups([+d.dupimp], true);
   if (d.dupskip) return resolveDups([+d.dupskip], false);
   if (d.dupall) return resolveDups(S.dupReview.map((_, i) => i), d.dupall === 'imp');
