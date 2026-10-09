@@ -71,6 +71,7 @@ button.count{border:0;background:var(--accent-soft);color:var(--accent);border-r
 button.count.zero{background:var(--line);color:var(--muted);cursor:default}
 button.count:not(.zero):hover{background:var(--accent);color:#fff}
 .hidden{display:none!important}
+.chip.dim{opacity:.5}
 select.scope{font-size:12px;padding:2px 6px;color:var(--muted)}
 dialog{border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink);padding:20px;width:min(420px,calc(100vw - 32px))}
 dialog::backdrop{background:rgba(0,0,0,.35)}
@@ -132,7 +133,10 @@ dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
     <h2>Unterkategorie bearbeiten</h2>
     <p class="muted" id="sdInfo" style="margin:0;font-size:12px"></p>
     <label for="sdName">Name</label><input id="sdName" required>
-    <label for="sdCat">Gehört zu Kategorie</label><select id="sdCat"></select>
+    <div class="row">
+      <div style="flex:3"><label for="sdCat">Gehört zu Kategorie</label><select id="sdCat"></select></div>
+      <div style="flex:2"><label for="sdScope">Sichtbar für</label><select id="sdScope"></select></div>
+    </div>
     <label for="sdMerge">Oder zusammenführen mit (optional)</label><select id="sdMerge"></select>
     <p class="muted" style="font-size:12px;margin:4px 0 0">Beim Zusammenführen wandern alle Buchungen und Regeln in die gewählte Unterkategorie, diese hier wird danach gelöscht.</p>
     <div class="actions">

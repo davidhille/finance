@@ -38,7 +38,7 @@ const accById = id => S.accounts.find(a => a.id === id);
 // Kategorie sichtbar für Konto? (account_id leer = alle Konten)
 const catVisible = (c, accId) => !c.account_id || !accId || accId === 'alle' || c.account_id === accId;
 // Unterkategorie für das Konto der Buchung erlaubt?
-const subAllowed = (subId, accId) => { const c = catById(subById(subId)?.category_id); return !!c && catVisible(c, accId); };
+const subAllowed = (subId, accId) => { const s = subById(subId), c = catById(s?.category_id); return !!c && catVisible(c, accId) && catVisible(s, accId); };
 const scopeTxt = c => c.account_id ? 'nur ' + (accById(c.account_id)?.name || '?') : 'alle Konten';
 // Buchungen im gewählten Konto (oder alle)
 const scoped = () => S.acc === 'alle' ? S.txs : S.txs.filter(t => t.account_id === S.acc);
@@ -251,7 +251,7 @@ function subOptions(selected, withNew = true, accId = null) {
   const selCat = subById(selected)?.category_id;
   for (const c of S.cats.filter(c => catVisible(c, accId) || c.id === selCat)) {
     h += `<optgroup label="${esc(c.name)}">`;
-    for (const s of S.subs.filter(s => s.category_id === c.id))
+    for (const s of S.subs.filter(s => s.category_id === c.id && (catVisible(s, accId) || s.id === selected)))
       h += `<option value="${s.id}"${s.id === selected ? ' selected' : ''}>${esc(c.name)} › ${esc(s.name)}</option>`;
     h += `</optgroup>`;
   }
@@ -464,7 +464,7 @@ function viewCats() {
   const cards = shown.map(c => `<div class="card"><h2>${esc(c.name)} ${badge(catCnt(c), c.id)}<span class="kind">${c.kind}</span>
       <button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button></h2>
       <div style="margin:-6px 0 8px">${scopeSel(c)}</div>
-      ${S.subs.filter(s => s.category_id === c.id).map(s => `<span class="chip">${esc(s.name)} ${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}<button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}">×</button></span>`).join('')}
+      ${S.subs.filter(s => s.category_id === c.id).map(s => `<span class="chip${catVisible(s, S.acc) ? '' : ' dim'}"${s.account_id ? ` title="${scopeTxt(s)}"` : ''}>${esc(s.name)}${s.account_id ? `<span class="kind">${scopeTxt(s)}</span>` : ''} ${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}<button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}">×</button></span>`).join('')}
       <div style="margin-top:8px"><button class="ghost" data-addsub="${c.id}">+ Unterkategorie</button></div></div>`).join('');
   const rules = [...S.rules.values()].filter(r => r.subcategory_id).sort((a, b) => a.match_key.localeCompare(b.match_key));
   const accCard = `<div class="card"><div class="filters"><h2 style="margin:0">Konten</h2>
@@ -547,6 +547,7 @@ function openSubDialog(id) {
   const n = S.txs.filter(t => t.subcategory_id === id).length;
   $('#sdInfo').textContent = `${n} Buchung(en) zugeordnet`;
   $('#sdName').value = s.name;
+  $('#sdScope').innerHTML = `<option value="">alle Konten</option>` + S.accounts.map(a => `<option value="${a.id}"${s.account_id === a.id ? ' selected' : ''}>nur ${esc(a.name)}</option>`).join('');
   $('#sdCat').innerHTML = S.cats.map(c => `<option value="${c.id}"${c.id === s.category_id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
   $('#sdMerge').innerHTML = '<option value="">– nicht zusammenführen –</option>' + S.cats.map(c =>
     `<optgroup label="${esc(c.name)}">${S.subs.filter(x => x.category_id === c.id && x.id !== id).map(x => `<option value="${x.id}">${esc(c.name)} › ${esc(x.name)}</option>`).join('')}</optgroup>`).join('');
@@ -555,7 +556,7 @@ function openSubDialog(id) {
 }
 function syncSubDialog() {
   const merge = !!$('#sdMerge').value;
-  $('#sdName').disabled = merge; $('#sdCat').disabled = merge;
+  $('#sdName').disabled = merge; $('#sdCat').disabled = merge; $('#sdScope').disabled = merge;
   $('#sdSave').textContent = merge ? 'Zusammenführen' : 'Speichern';
 }
 async function submitSubDialog() {
@@ -579,11 +580,15 @@ async function submitSubDialog() {
   if (!name) return $('#sdName').focus();
   if (S.subs.some(x => x.id !== s.id && x.category_id === category_id && x.name.toLowerCase() === name.toLowerCase()))
     return toast(`„${name}" gibt es dort schon – zum Zusammenführen unten auswählen`);
-  const { error } = await sb.from('subcategories').update({ name, category_id }).eq('id', s.id);
-  if (error) throw error;
+  const account_id = $('#sdScope').value || null;
+  const { error } = await sb.from('subcategories').update({ name, category_id, account_id }).eq('id', s.id);
+  if (error) throw /account_id/.test(error.message) ? new Error('Bitte migrations/006_unterkategorie_konto.sql in Supabase ausführen') : error;
   const moved = category_id !== s.category_id;
-  Object.assign(s, { name, category_id });
+  Object.assign(s, { name, category_id, account_id });
   $('#subDlg').close(); sdId = null;
+  const orphan = S.txs.filter(x => x.subcategory_id === s.id && !catVisible(s, x.account_id));
+  if (orphan.length && confirm(`„${s.name}" gilt jetzt ${scopeTxt(s)}.\n\n${orphan.length} Buchung(en) aus anderen Konten sind ihr noch zugeordnet.\n\nOK = diese wieder auf „offen" setzen\nAbbrechen = Zuordnung behalten`))
+    await updateTxs(orphan.map(x => x.id), { subcategory_id: null, assign_state: null });
   toast(moved ? `Verschoben nach ${catById(category_id).name}` : 'Gespeichert'); render();
 }
 $('#subForm').addEventListener('submit', e => { e.preventDefault(); submitSubDialog().catch(fail); });
