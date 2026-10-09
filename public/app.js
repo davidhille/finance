@@ -328,14 +328,21 @@ function amountMatcher(q) {
   return null;
 }
 
+// "sub:<id>" (aus Drilldown/Badges) in Kategorie + Unterkategorie aufteilen
+function normFilter() {
+  if (S.f.cat?.startsWith('sub:')) { const sId = S.f.cat.slice(4); S.f.sub = sId; S.f.cat = subById(sId)?.category_id || 'alle'; }
+  if (S.f.sub && (S.f.cat === 'alle' || S.f.cat === 'offen' || subById(S.f.sub)?.category_id !== S.f.cat)) S.f.sub = '';
+  S.f.sub = S.f.sub || '';
+}
 function filteredTxs() {
-  const { year, month, cat, q } = S.f;
+  normFilter();
+  const { year, month, cat, sub, q } = S.f;
   const ql = q.toLowerCase(), amt = q.trim() ? amountMatcher(q) : null;
   return scoped().filter(t => {
     if (year !== 'alle' && t.booking_date.slice(0, 4) !== year) return false;
     if (month !== 'alle' && +t.booking_date.slice(5, 7) !== +month) return false;
     if (cat === 'offen' && t.subcategory_id && t.assign_state !== 'vorschlag') return false;
-    if (cat.startsWith('sub:')) { if (t.subcategory_id !== cat.slice(4) || t.assign_state === 'vorschlag') return false; }
+    if (sub) { if (t.subcategory_id !== sub || t.assign_state === 'vorschlag') return false; }
     else if (cat !== 'alle' && cat !== 'offen' && catOfTx(t)?.id !== cat) return false;
     if (ql && !(amt ? amt(t.amount) : (t.payee + ' ' + t.purpose + ' ' + t.counterparty_raw).toLowerCase().includes(ql))) return false;
     return true;
@@ -368,8 +375,8 @@ function viewTx() {
         <option value="offen"${S.f.cat === 'offen' ? ' selected' : ''}>Offen &amp; Vorschläge</option>
         <option value="alle"${S.f.cat === 'alle' ? ' selected' : ''}>Alle Kategorien</option>
         ${S.cats.filter(c => catVisible(c, S.acc) || S.f.cat === c.id).map(c => `<option value="${c.id}"${S.f.cat === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
-        ${S.f.cat.startsWith('sub:') ? (s => `<option value="${S.f.cat}" selected>${esc(catById(s?.category_id)?.name)} › ${esc(s?.name)}</option>`)(subById(S.f.cat.slice(4))) : ''}
       </select>
+      ${catById(S.f.cat) ? `<select id="fSub"><option value="">Alle Unterkategorien</option>${S.subs.filter(x => x.category_id === S.f.cat && (catVisible(x, S.acc) || x.id === S.f.sub)).map(x => `<option value="${x.id}"${S.f.sub === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : ''}
       <input id="fQ" placeholder="Text oder Betrag (36,73 · >100 · 50-100)" title="Text: Empfänger/Zweck · Betrag: 36,73 genau · 36 = 36,00–36,99 · -36,73 nur Ausgaben · >100 · <=20 · 50-100" style="min-width:240px" value="${esc(S.f.q)}">
       <span class="spacer" style="flex:1"></span>
       <span class="muted">${list.length} Buchungen · Summe <b class="num ${sign(sum)}">${eur(sum)}</b></span>
@@ -920,7 +927,8 @@ document.addEventListener('change', guard(async e => {
   if (t.dataset.payee) return setPayee(t.dataset.payee, t.value);
   if (t.id === 'fYear') { S.f.year = t.value; return render(); }
   if (t.id === 'fMonth') { S.f.month = t.value; return render(); }
-  if (t.id === 'fCat') { S.f.cat = t.value; return render(); }
+  if (t.id === 'fCat') { S.f.cat = t.value; S.f.sub = ''; return render(); }
+  if (t.id === 'fSub') { S.f.sub = t.value; return render(); }
   if (t.id === 'ySel') { S.yearSel = +t.value; return render(); }
   if (t.id === 'cmpYtd') { S.cmpYtd = t.checked; return render(); }
   if (t.id === 'accSel') { S.acc = t.value; try { localStorage.setItem('fin_acc', S.acc); } catch {} return render(); }
