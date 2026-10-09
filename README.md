@@ -10,16 +10,14 @@
 ## 2. App konfigurieren
 In `config.js` URL und Anon-Key eintragen. Der Anon-Key ist öffentlich gedacht; geschützt wird über Login + Row Level Security.
 
-## 3. GitHub Pages
-1. GitHub-Repo `finance` (im Gratis-Tarif muss es **öffentlich** sein, damit Pages läuft).
-   Öffentlich ist nur der Code – deine Buchungen liegen in Supabase hinter Login + RLS.
-2. Code pushen.
-3. Repo → *Settings* → *Pages* → *Deploy from a branch* → `main` / `/ (root)` → *Save*.
-4. Nach ca. 1 Minute erreichbar unter `https://davidhille.github.io/finance/`.
-   Ab dann: `git push` auf `main` = Deploy.
+## 3. Cloudflare Pages (keine eigene Domain nötig)
+1. dash.cloudflare.com → *Workers & Pages* → *Create* → Reiter *Pages* → *Connect to Git*.
+2. GitHub verbinden, Repo `davidhille/finance` freigeben und auswählen (Repo darf privat bleiben).
+3. Framework preset *None*, Build command leer, Build output directory `/` → *Save and Deploy*.
+4. Die App läuft unter `https://<projektname>.pages.dev`. Ab dann: `git push` auf `main` = Deploy.
 5. Supabase → *Authentication* → *URL Configuration*: diese Adresse als *Site URL* eintragen.
 
-Später umziehen (Cloudflare, eigene Domain) geht jederzeit ohne Codeänderung.
+Eine eigene Domain kann später unter *Custom domains* ergänzt werden.
 
 ## Bedienung
 - **Import**: DKB-CSV (Umsätze → Export CSV) hochladen. Doppelte Buchungen werden erkannt, vorgemerkte übersprungen.
