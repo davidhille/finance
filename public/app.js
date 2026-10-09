@@ -540,6 +540,29 @@ $('#newForm').addEventListener('submit', e => { e.preventDefault(); submitNewDia
 $('#ndCancel').onclick = closeNewDialog;
 $('#newDlg').addEventListener('cancel', e => { e.preventDefault(); closeNewDialog(); });
 
+// ---------- Auswahl-Dialog mit mehreren Knöpfen ----------
+// buttons: [{ value, label, primary }]; Rückgabe: gewählter value, oder null bei Abbrechen/Esc
+function askChoice(title, text, buttons) {
+  return new Promise(resolve => {
+    const dlg = $('#choiceDlg');
+    $('#chTitle').textContent = title; $('#chText').textContent = text;
+    $('#chButtons').innerHTML = [{ value: '', label: 'Abbrechen' }, ...buttons].map(b =>
+      `<button type="button" class="${b.primary ? 'btn' : 'ghost'}" data-choice="${b.value}">${esc(b.label)}</button>`).join('');
+    const done = v => { dlg.close(); resolve(v || null); };
+    $('#chButtons').onclick = e => { const b = e.target.closest('[data-choice]'); if (b) done(b.dataset.choice); };
+    dlg.oncancel = e => { e.preventDefault(); done(null); };
+    dlg.showModal();
+  });
+}
+// Vor einer Konto-Umstellung: betroffene Buchungen klären. Rückgabe 'reset' | 'keep' | null (abbrechen)
+async function askScopeChange(name, newScopeTxt, orphan) {
+  if (!orphan.length) return 'keep';
+  const per = S.accounts.map(a => [a.name, orphan.filter(x => x.account_id === a.id).length]).filter(([, n]) => n).map(([a, n]) => `${n} ${a}`).join(', ');
+  return askChoice(`„${name}" auf ${newScopeTxt} umstellen?`,
+    `${orphan.length} Buchung(en) aus anderen Konten sind noch zugeordnet (${per}).\n\nWas soll mit diesen Buchungen passieren?`,
+    [{ value: 'keep', label: 'Umstellen, Zuordnung behalten' }, { value: 'reset', label: 'Umstellen, Buchungen auf offen', primary: true }]);
+}
+
 // ---------- Unterkategorie bearbeiten / verschieben / zusammenführen ----------
 let sdId = null;
 function openSubDialog(id) {
@@ -581,14 +604,17 @@ async function submitSubDialog() {
   if (S.subs.some(x => x.id !== s.id && x.category_id === category_id && x.name.toLowerCase() === name.toLowerCase()))
     return toast(`„${name}" gibt es dort schon – zum Zusammenführen unten auswählen`);
   const account_id = $('#sdScope').value || null;
+  const next = { ...s, account_id };
+  const orphan = S.txs.filter(x => x.subcategory_id === s.id && !catVisible(next, x.account_id));
+  $('#subDlg').close();
+  const choice = await askScopeChange(name, scopeTxt(next), orphan);
+  if (!choice) { $('#subDlg').showModal(); return; }
   const { error } = await sb.from('subcategories').update({ name, category_id, account_id }).eq('id', s.id);
   if (error) throw /account_id/.test(error.message) ? new Error('Bitte migrations/006_unterkategorie_konto.sql in Supabase ausführen') : error;
   const moved = category_id !== s.category_id;
   Object.assign(s, { name, category_id, account_id });
-  $('#subDlg').close(); sdId = null;
-  const orphan = S.txs.filter(x => x.subcategory_id === s.id && !catVisible(s, x.account_id));
-  if (orphan.length && confirm(`„${s.name}" gilt jetzt ${scopeTxt(s)}.\n\n${orphan.length} Buchung(en) aus anderen Konten sind ihr noch zugeordnet.\n\nOK = diese wieder auf „offen" setzen\nAbbrechen = Zuordnung behalten`))
-    await updateTxs(orphan.map(x => x.id), { subcategory_id: null, assign_state: null });
+  sdId = null;
+  if (choice === 'reset') await updateTxs(orphan.map(x => x.id), { subcategory_id: null, assign_state: null });
   toast(moved ? `Verschoben nach ${catById(category_id).name}` : 'Gespeichert'); render();
 }
 $('#subForm').addEventListener('submit', e => { e.preventDefault(); submitSubDialog().catch(fail); });
@@ -759,17 +785,16 @@ document.addEventListener('change', guard(async e => {
   if (t.id === 'ndCat') return toggleNewBox();
   if (t.dataset.scope) {
     const c = catById(t.dataset.scope), account_id = t.value || null;
+    const next = { ...c, account_id };
+    const subIds = S.subs.filter(x => x.category_id === c.id).map(x => x.id);
+    const orphan = S.txs.filter(x => subIds.includes(x.subcategory_id) && !catVisible(next, x.account_id));
+    const choice = await askScopeChange(c.name, scopeTxt(next), orphan);
+    if (!choice) return render();
     const { error } = await sb.from('categories').update({ account_id }).eq('id', c.id);
     if (error) { render(); throw /account_id/.test(error.message) ? new Error('Bitte migrations/005_kategorie_konto.sql in Supabase ausführen') : error; }
     c.account_id = account_id;
-    const subIds = S.subs.filter(x => x.category_id === c.id).map(x => x.id);
-    const orphan = S.txs.filter(x => subIds.includes(x.subcategory_id) && !catVisible(c, x.account_id));
-    if (orphan.length) {
-      const per = S.accounts.map(a => [a.name, orphan.filter(x => x.account_id === a.id).length]).filter(([, n]) => n).map(([a, n]) => `${n} ${a}`).join(', ');
-      if (confirm(`„${c.name}" gilt jetzt ${scopeTxt(c)}.\n\n${orphan.length} Buchung(en) aus anderen Konten sind ihr noch zugeordnet (${per}).\n\nOK = diese wieder auf „offen" setzen\nAbbrechen = Zuordnung behalten`))
-        await updateTxs(orphan.map(x => x.id), { subcategory_id: null, assign_state: null });
-    }
-    toast(`${c.name}: ${scopeTxt(c)}`); return render();
+    if (choice === 'reset') await updateTxs(orphan.map(x => x.id), { subcategory_id: null, assign_state: null });
+    toast(`${c.name}: ${scopeTxt(c)}${choice === 'reset' && orphan.length ? ` – ${orphan.length} Buchung(en) offen` : ''}`); return render();
   }
   if (t.id === 'edAcc') { const cur = $('#edSub').value; $('#edSub').innerHTML = subOptions(cur, false, t.value); $('#edSub').value = cur; return; }
   if (t.id === 'ruAcc') { const cur = $('#ruSub').value; $('#ruSub').innerHTML = subOptions(cur, false, t.value || null).replace('<option value="">– offen –</option>', '<option value="">– Kategorie wählen –</option>'); $('#ruSub').value = cur; return; }
