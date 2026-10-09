@@ -110,9 +110,14 @@ function ruleMatches(r, t) {
   if (r.account_id && t.account_id && r.account_id !== t.account_id) return false;
   if (r.direction === 'ausgabe' && t.amount >= 0) return false;
   if (r.direction === 'einnahme' && t.amount < 0) return false;
-  const who = `${t.counterparty_raw || ''} ${t.payee || ''}`, why = t.purpose || '';
-  const hay = (r.field === 'empfaenger' ? who : r.field === 'zweck' ? why : who + ' ' + why).toLowerCase();
-  return !!r.pattern && hay.includes(r.pattern.toLowerCase());
+  const who = `${t.counterparty_raw || ''} ${t.payee || ''}`.toLowerCase(), why = (t.purpose || '').toLowerCase();
+  if (!r.pattern && !r.purpose_pattern) return false;
+  if (r.pattern) {
+    const hay = r.field === 'empfaenger' ? who : r.field === 'zweck' ? why : who + ' ' + why;
+    if (!hay.includes(r.pattern.toLowerCase())) return false;
+  }
+  if (r.purpose_pattern && !why.includes(r.purpose_pattern.toLowerCase())) return false;
+  return true;
 }
 const findUserRule = t => S.userRules.find(r => ruleMatches(r, t));
 
@@ -523,13 +528,15 @@ $('#newDlg').addEventListener('cancel', e => { e.preventDefault(); closeNewDialo
 
 // ---------- Eigene Regeln ----------
 const FIELD_TXT = { alle: 'Empfänger oder Zweck', empfaenger: 'Empfänger', zweck: 'Verwendungszweck' };
+const condTxt = r => [r.pattern ? `${FIELD_TXT[r.field]} enthält „<b>${esc(r.pattern)}</b>"` : '',
+  r.purpose_pattern ? `Zweck enthält „<b>${esc(r.purpose_pattern)}</b>"` : ''].filter(Boolean).join(' <span class="muted">und</span> ');
 const DIR_TXT = { beide: '', ausgabe: ' · nur Ausgaben', einnahme: ' · nur Einnahmen' };
 function viewUserRules() {
   if (S.noUserRules) return `<div class="card" style="margin-top:16px"><h2>Eigene Regeln</h2>
     <p class="neg">Bitte zuerst <code>migrations/003_eigene_regeln.sql</code> im Supabase SQL Editor ausführen und die Seite neu laden.</p></div>`;
   const rows = S.userRules.map(r => {
     const s = subById(r.subcategory_id), n = S.txs.filter(t => ruleMatches(r, t)).length;
-    return `<tr><td>${FIELD_TXT[r.field]} enthält „<b>${esc(r.pattern)}</b>"<span class="muted">${DIR_TXT[r.direction]}${r.account_id ? ' · ' + esc(accById(r.account_id)?.name) : ''}</span></td>
+    return `<tr><td>${condTxt(r)}<span class="muted">${DIR_TXT[r.direction]}${r.account_id ? ' · ' + esc(accById(r.account_id)?.name) : ''}</span></td>
       <td>${s ? esc(catById(s.category_id)?.name + ' › ' + s.name) : '–'}</td><td>${esc(r.payee || '')}</td>
       <td class="num">${n}</td>
       <td style="white-space:nowrap"><button class="icon" data-editrule="${r.id}" title="Bearbeiten">✎</button><button class="icon" data-deluserrule="${r.id}" title="Löschen">×</button></td></tr>`;
@@ -540,12 +547,17 @@ function viewUserRules() {
     ${rows ? `<div class="tablewrap"><table><thead><tr><th>Bedingung</th><th>Kategorie</th><th>Anzeigename</th><th class="num">Treffer</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}</div>`;
 }
 
-let ruId = null;
+let ruId = null, ruLegacyAlle = false, ruLegacyPattern = '';
 function openRuleDialog(rule = null, prefill = {}) {
   ruId = rule?.id || null;
-  const r = rule || { field: 'alle', direction: 'beide', account_id: null, payee: '', subcategory_id: null, pattern: '', ...prefill };
+  const r = rule || { field: 'empfaenger', direction: 'beide', account_id: null, payee: '', subcategory_id: null, pattern: '', purpose_pattern: '', ...prefill };
   $('#ruTitle').textContent = rule ? 'Regel bearbeiten' : 'Neue Regel';
-  $('#ruField').value = r.field; $('#ruPattern').value = r.pattern; $('#ruDir').value = r.direction;
+  // Alte Regeln: Text stand in "Zweck" bzw. "Empfänger oder Zweck"
+  let emp = r.field === 'zweck' ? '' : (r.pattern || ''), zweck = r.purpose_pattern || (r.field === 'zweck' ? r.pattern : '') || '';
+  ruLegacyAlle = r.field === 'alle' && !!r.pattern;
+  $('#ruLegacy').textContent = ruLegacyAlle ? 'Diese Regel sucht den Empfänger-Text bisher auch im Verwendungszweck – bleibt so, solange du das Feld nicht änderst.' : '';
+  ruLegacyPattern = emp;
+  $('#ruPattern').value = emp; $('#ruPurpose').value = zweck; $('#ruDir').value = r.direction;
   $('#ruAcc').innerHTML = `<option value="">Alle Konten</option>` + S.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
   $('#ruAcc').value = r.account_id || '';
   $('#ruSub').innerHTML = subOptions(r.subcategory_id, false).replace('<option value="">– offen –</option>', '<option value="">– Kategorie wählen –</option>');
@@ -554,12 +566,15 @@ function openRuleDialog(rule = null, prefill = {}) {
   $('#ruleDlg').showModal(); $('#ruPattern').focus();
 }
 function ruleFromDialog() {
-  return { field: $('#ruField').value, pattern: $('#ruPattern').value.trim(), direction: $('#ruDir').value,
+  const emp = $('#ruPattern').value.trim(), zweck = $('#ruPurpose').value.trim();
+  const keepAlle = ruLegacyAlle && emp === ruLegacyPattern;
+  return { field: emp ? (keepAlle ? 'alle' : 'empfaenger') : 'zweck', pattern: emp || zweck, purpose_pattern: emp && zweck ? zweck : null,
+    direction: $('#ruDir').value,
     account_id: $('#ruAcc').value || null, subcategory_id: $('#ruSub').value || null, payee: $('#ruPayee').value.trim() || null };
 }
 function updateRulePreview() {
   const r = ruleFromDialog();
-  if (!r.pattern) { $('#ruPreview').textContent = ''; return; }
+  if (!r.pattern) { $('#ruPreview').textContent = 'Empfänger und/oder Verwendungszweck eingeben.'; return; }
   const hits = S.txs.filter(t => ruleMatches(r, t));
   const manual = hits.filter(t => t.assign_state === 'manuell').length;
   const names = [...new Set(hits.map(t => t.payee))].slice(0, 4).join(', ');
@@ -567,17 +582,18 @@ function updateRulePreview() {
     ? `${hits.length} passende Buchung(en)${manual ? `, davon ${manual} manuell zugeordnet (bleiben unverändert)` : ''} – z. B. ${names}`
     : 'Noch keine passende Buchung – gilt dann für künftige Importe.';
 }
+const migHint = e => /purpose_pattern/.test(e.message || '') ? new Error('Bitte migrations/004_regel_zweck.sql in Supabase ausführen') : e;
 async function submitRuleDialog() {
   const r = ruleFromDialog();
-  if (!r.pattern) return $('#ruPattern').focus();
+  if (!r.pattern) { $('#ruPattern').focus(); return toast('Empfänger oder Verwendungszweck eingeben'); }
   if (!r.subcategory_id) { $('#ruSub').focus(); return toast('Bitte Kategorie wählen'); }
   if (ruId) {
     const { data, error } = await sb.from('user_rules').update(r).eq('id', ruId).select().single();
-    if (error) throw error;
+    if (error) throw migHint(error);
     Object.assign(S.userRules.find(x => x.id === ruId), data);
   } else {
     const { data, error } = await sb.from('user_rules').insert({ ...r, sort: S.userRules.length }).select().single();
-    if (error) throw error;
+    if (error) throw migHint(error);
     S.userRules.push(data);
   }
   $('#ruleDlg').close(); ruId = null;
@@ -591,12 +607,12 @@ async function submitRuleDialog() {
 }
 $('#ruleForm').addEventListener('submit', e => { e.preventDefault(); submitRuleDialog().catch(fail); });
 $('#ruCancel').onclick = () => { $('#ruleDlg').close(); ruId = null; };
-['ruField', 'ruPattern', 'ruDir', 'ruAcc'].forEach(id => $('#' + id).addEventListener('input', updateRulePreview));
+['ruPattern', 'ruPurpose', 'ruDir', 'ruAcc'].forEach(id => $('#' + id).addEventListener('input', updateRulePreview));
 $('#edRule').onclick = () => {
   const t = S.txs.find(x => x.id === edId); if (!t) return;
   $('#editDlg').close(); edId = null;
   const party = P.isProcessor(t.counterparty_raw) ? '' : (t.counterparty_raw || '').split('/')[0].trim();
-  openRuleDialog(null, { field: party ? 'empfaenger' : 'zweck', pattern: party || '', subcategory_id: t.subcategory_id,
+  openRuleDialog(null, { field: party ? 'empfaenger' : 'zweck', pattern: party || P.displayName(t.counterparty_raw, t.purpose).replace(/^PayPal$/, ''), subcategory_id: t.subcategory_id,
     direction: t.amount < 0 ? 'ausgabe' : 'einnahme' });
 };
 

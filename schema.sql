@@ -111,3 +111,6 @@ create policy own_rows on user_rules for all to authenticated
 
 revoke all on user_rules from anon;
 grant select, insert, update, delete on user_rules to authenticated;
+
+-- Zusätzliche Bedingung Verwendungszweck (UND)
+alter table user_rules add column if not exists purpose_pattern text;

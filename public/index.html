@@ -128,11 +128,12 @@ dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
 <dialog id="ruleDlg">
   <form id="ruleForm">
     <h2 id="ruTitle">Eigene Regel</h2>
-    <div class="row">
-      <div style="flex:1"><label for="ruField">Wenn</label>
-        <select id="ruField"><option value="alle">Empfänger oder Zweck</option><option value="empfaenger">Empfänger</option><option value="zweck">Verwendungszweck</option></select></div>
-      <div style="flex:1"><label for="ruPattern">enthält</label><input id="ruPattern" required placeholder="z. B. Spotify"></div>
-    </div>
+    <label for="ruPattern">Wenn Empfänger enthält</label>
+    <input id="ruPattern" placeholder="z. B. David Hille">
+    <label for="ruPurpose">und Verwendungszweck enthält</label>
+    <input id="ruPurpose" placeholder="z. B. Haus + Leben">
+    <p class="muted" id="ruLegacy" style="font-size:12px;margin:4px 0 0"></p>
+    <p class="muted" style="font-size:12px;margin:4px 0 0">Ein Feld reicht. Sind beide ausgefüllt, müssen beide passen. Groß-/Kleinschreibung egal.</p>
     <div class="row">
       <div style="flex:1"><label for="ruDir">Richtung</label>
         <select id="ruDir"><option value="beide">Ein- und Ausgänge</option><option value="ausgabe">Nur Ausgaben</option><option value="einnahme">Nur Einnahmen</option></select></div>
