@@ -464,12 +464,18 @@ function viewCats() {
   const badge = (n, filter) => `<button class="count${n ? '' : ' zero'}" data-showtx="${filter}" title="Buchungen anzeigen"${n ? '' : ' disabled'}>${n}</button>`;
   const shown = S.cats.filter(c => catVisible(c, S.acc)), hidden = S.cats.filter(c => !catVisible(c, S.acc));
   const scopeSel = c => `<select class="scope" data-scope="${c.id}" title="Für welche Konten?"><option value="">alle Konten</option>${S.accounts.map(a => `<option value="${a.id}"${c.account_id === a.id ? ' selected' : ''}>nur ${esc(a.name)}</option>`).join('')}</select>`;
-  const cards = shown.map(c => `<div class="card"><h2>${esc(c.name)} ${badge(catCnt(c), c.id)}<span class="kind">${c.kind}</span>
-      <button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button>
-      <span style="float:right;white-space:nowrap"><button class="icon" data-catmove="${c.id}|-1" title="Nach vorne"${S.cats[0] === c ? ' disabled' : ''}>◀</button><button class="icon" data-catmove="${c.id}|1" title="Nach hinten"${S.cats[S.cats.length - 1] === c ? ' disabled' : ''}>▶</button></span></h2>
-      <div style="margin:-6px 0 8px">${scopeSel(c)}</div>
-      ${S.subs.filter(s => s.category_id === c.id).map(s => `<span class="chip${catVisible(s, S.acc) ? '' : ' dim'}"${s.account_id ? ` title="${scopeTxt(s)}"` : ''}>${esc(s.name)}${s.account_id ? `<span class="kind">${scopeTxt(s)}</span>` : ''} ${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}<button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}">×</button></span>`).join('')}
-      <div style="margin-top:8px"><button class="ghost" data-addsub="${c.id}">+ Unterkategorie</button></div></div>`).join('');
+  const KIND = { ausgabe: 'Ausgabe', einnahme: 'Einnahme', umbuchung: 'Umbuchung' };
+  const tag = x => x.account_id ? `<span class="tag" title="${esc(scopeTxt(x))}">${esc(accById(x.account_id)?.name || '?')}</span>` : '';
+  const cards = shown.map(c => `<div class="card catcard">
+      <div class="cathead">
+        <h2 class="name" title="${esc(c.name)}">${esc(c.name)}</h2>${badge(catCnt(c), c.id)}
+        <span class="acts"><button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button></span>
+      </div>
+      <div class="catmeta"><span class="kind" style="margin:0">${KIND[c.kind] || c.kind}</span>${scopeSel(c)}<span class="move"><button class="icon" data-catmove="${c.id}|-1" title="Nach vorne"${S.cats[0] === c ? ' disabled' : ''}>◀</button><button class="icon" data-catmove="${c.id}|1" title="Nach hinten"${S.cats[S.cats.length - 1] === c ? ' disabled' : ''}>▶</button></span></div>
+      <div class="sublist">${S.subs.filter(s => s.category_id === c.id).map(s => `<div class="subrow${catVisible(s, S.acc) ? '' : ' dim'}">
+        <span class="n" title="${esc(s.name)}">${esc(s.name)}${tag(s)}</span>${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}
+        <button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}" title="Löschen">×</button></div>`).join('')}</div>
+      <button class="ghost addsub" data-addsub="${c.id}">+ Unterkategorie</button></div>`).join('');
   const rules = [...S.rules.values()].filter(r => r.subcategory_id).sort((a, b) => a.match_key.localeCompare(b.match_key));
   const accCard = `<div class="card"><div class="filters"><h2 style="margin:0">Konten</h2>
       ${S.accounts.map(a => `<span class="chip">${esc(a.name)} <span class="muted">(${S.txs.filter(t => t.account_id === a.id).length})</span><button class="icon" data-renacc="${a.id}">✎</button><button class="icon" data-delacc="${a.id}">×</button></span>`).join('')}
