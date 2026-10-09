@@ -3,8 +3,10 @@ const P = window.FinParser;
 const cfg = window.FIN_CONFIG;
 const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
-const S = { userRules: [], noUserRules: false, dupReview: [], accounts: [], acc: 'alle', cats: [], subs: [], txs: [], rules: new Map(), view: 'tx',
-  f: { year: 'alle', month: 'alle', cat: 'offen', q: '' }, yearSel: null, expanded: new Set() };
+const S = { userRules: [], noUserRules: false, dupReview: [], accounts: [], acc: 'alle', cats: [], subs: [], txs: [], rules: new Map(), view: 'home',
+  f: { year: 'alle', month: 'alle', cat: 'offen', sub: '', tag: '', q: '' }, yearSel: null, expanded: new Set(),
+  sel: new Set(), from: null, homeMonth: null, showEnded: false };
+const F0 = { year: 'alle', month: 'alle', cat: 'alle', sub: '', tag: '', q: '', ids: null, idsLabel: '' };
 
 const MONTHS = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
 const DEFAULTS = [
@@ -30,6 +32,8 @@ const sign = n => n < 0 ? 'neg' : n > 0 ? 'pos' : 'muted';
 const fmtDate = d => d.split('-').reverse().join('.');
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2600); }
 function fail(err) { console.error(err); toast('Fehler: ' + (err.message || err)); }
+// Fehlende Spalten → Hinweis auf Migration 007
+const mig7 = e => /\b(note|tags|budget)\b/.test(e?.message || '') ? new Error('Bitte migrations/007_notizen_tags_budget.sql in Supabase ausführen') : e;
 const subById = id => S.subs.find(s => s.id === id);
 const catById = id => S.cats.find(c => c.id === id);
 const catOfTx = t => { const s = subById(t.subcategory_id); return s ? catById(s.category_id) : null; };
@@ -332,39 +336,43 @@ function amountMatcher(q) {
 function normFilter() {
   if (S.f.cat?.startsWith('sub:')) { const sId = S.f.cat.slice(4); S.f.sub = sId; S.f.cat = subById(sId)?.category_id || 'alle'; }
   if (S.f.sub && (S.f.cat === 'alle' || S.f.cat === 'offen' || subById(S.f.sub)?.category_id !== S.f.cat)) S.f.sub = '';
-  S.f.sub = S.f.sub || '';
+  S.f.sub = S.f.sub || ''; S.f.tag = S.f.tag || ''; S.f.q = S.f.q || '';
 }
 function filteredTxs() {
   normFilter();
-  const { year, month, cat, sub, q } = S.f;
-  const ql = q.toLowerCase(), amt = q.trim() ? amountMatcher(q) : null;
+  const { year, month, cat, sub, tag, q, ids } = S.f;
+  const ql = (q || '').toLowerCase(), amt = ql.trim() ? amountMatcher(q) : null, idSet = ids ? new Set(ids) : null;
   return scoped().filter(t => {
+    if (idSet && !idSet.has(t.id)) return false;
+    if (tag && !(t.tags || []).includes(tag)) return false;
     if (year !== 'alle' && t.booking_date.slice(0, 4) !== year) return false;
     if (month !== 'alle' && +t.booking_date.slice(5, 7) !== +month) return false;
     if (cat === 'offen' && t.subcategory_id && t.assign_state !== 'vorschlag') return false;
     if (sub) { if (t.subcategory_id !== sub || t.assign_state === 'vorschlag') return false; }
     else if (cat !== 'alle' && cat !== 'offen' && catOfTx(t)?.id !== cat) return false;
-    if (ql && !(amt ? amt(t.amount) : (t.payee + ' ' + t.purpose + ' ' + t.counterparty_raw).toLowerCase().includes(ql))) return false;
+    if (ql && !(amt ? amt(t.amount) : `${t.payee} ${t.purpose} ${t.counterparty_raw} ${t.note || ''} ${(t.tags || []).join(' ')}`.toLowerCase().includes(ql))) return false;
     return true;
   });
 }
 
 function viewTx() {
-  const list = filteredTxs();
+  const list = filteredTxs().sort((a, b) => b.booking_date.localeCompare(a.booking_date));
   const sum = list.reduce((a, t) => a + t.amount, 0);
   const rows = list.slice(0, 600).map(t => {
     const st = !t.subcategory_id ? '<span class="state offen">offen</span>'
       : t.assign_state === 'vorschlag' ? `<span class="state vorschlag">Vorschlag</span> <button class="icon" data-ok="${t.id}" title="Vorschlag bestätigen">✓</button>`
       : t.assign_state === 'auto' ? '<span class="state auto">auto</span>' : '';
+    const tags = (t.tags || []).length ? `<div class="tags">${t.tags.map(g => `<button class="tag t" data-tagf="${esc(g)}" title="Nach Tag filtern">#${esc(g)}</button>`).join('')}</div>` : '';
     return `<tr>
-      <td class="num muted">${fmtDate(t.booking_date)}</td>
-      ${S.acc === 'alle' ? `<td class="muted">${esc(accById(t.account_id)?.name || '–')}</td>` : ''}
-      <td><input class="payee" data-payee="${t.id}" value="${esc(t.payee)}" title="Original: ${esc(t.counterparty_raw)}"></td>
-      <td class="purpose" title="${esc(t.purpose)}">${esc(t.purpose)}</td>
-      <td class="num ${sign(t.amount)}">${eur(t.amount)}</td>
-      <td><select data-sub="${t.id}">${subOptions(t.subcategory_id, true, t.account_id)}</select></td>
-      <td>${st}</td>
-      <td style="white-space:nowrap"><button class="icon" data-edit="${t.id}" title="Bearbeiten">✎</button><button class="icon" data-del="${t.id}" title="Löschen">×</button></td></tr>`;
+      <td class="c-sel"><input type="checkbox" data-selid="${t.id}"${S.sel.has(t.id) ? ' checked' : ''} aria-label="Auswählen"></td>
+      <td class="c-date num muted">${fmtDate(t.booking_date)}</td>
+      ${S.acc === 'alle' ? `<td class="c-acc muted">${esc(accById(t.account_id)?.name || '–')}</td>` : ''}
+      <td class="c-payee"><input class="payee" data-payee="${t.id}" value="${esc(t.payee)}" title="Original: ${esc(t.counterparty_raw)}">${tags}</td>
+      <td class="c-purpose purpose" title="${esc(t.purpose)}">${esc(t.purpose)}${t.note ? `<div class="note">📝 ${esc(t.note)}</div>` : ''}</td>
+      <td class="c-amt num ${sign(t.amount)}">${eur(t.amount)}</td>
+      <td class="c-cat"><select data-sub="${t.id}">${subOptions(t.subcategory_id, true, t.account_id)}</select></td>
+      <td class="c-state">${st}</td>
+      <td class="c-act" style="white-space:nowrap"><button class="icon" data-edit="${t.id}" title="Bearbeiten">✎</button><button class="icon" data-del="${t.id}" title="Löschen">×</button></td></tr>`;
   }).join('');
   const y = years();
   return `<div class="card">
@@ -377,12 +385,15 @@ function viewTx() {
         ${S.cats.filter(c => catVisible(c, S.acc) || S.f.cat === c.id).map(c => `<option value="${c.id}"${S.f.cat === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
       </select>
       ${catById(S.f.cat) ? `<select id="fSub"><option value="">Alle Unterkategorien</option>${S.subs.filter(x => x.category_id === S.f.cat && (catVisible(x, S.acc) || x.id === S.f.sub)).map(x => `<option value="${x.id}"${S.f.sub === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : ''}
+      ${allTags().length ? `<select id="fTag"><option value="">Alle Tags</option>${allTags().map(g => `<option${S.f.tag === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}</select>` : ''}
       <input id="fQ" placeholder="Text oder Betrag (36,73 · >100 · 50-100)" title="Text: Empfänger/Zweck · Betrag: 36,73 genau · 36 = 36,00–36,99 · -36,73 nur Ausgaben · >100 · <=20 · 50-100" style="min-width:240px" value="${esc(S.f.q)}">
-      <span class="spacer" style="flex:1"></span>
-      <span class="muted">${list.length} Buchungen · Summe <b class="num ${sign(sum)}">${eur(sum)}</b></span>
+      ${S.f.ids ? `<span class="chip">${esc(S.f.idsLabel || 'Auswahl')}<button class="icon" data-clearids title="Filter entfernen">×</button></span>` : ''}
     </div>
-    ${list.length ? `<div class="tablewrap"><table>
-      <thead><tr><th>Datum</th>${S.acc === 'alle' ? '<th>Konto</th>' : ''}<th>Empfänger / Auftraggeber</th><th>Verwendungszweck</th><th class="num">Betrag</th><th>Kategorie</th><th></th><th></th></tr></thead>
+    <div class="listhead"><span class="muted">${list.length} Buchungen · Summe <b class="num ${sign(sum)}">${eur(sum)}</b></span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="ghost small" id="csvFiltered" title="Diese Liste als CSV (Excel) herunterladen"${list.length ? '' : ' disabled'}>⬇ CSV</button></div>
+    ${list.length ? `<div class="tablewrap"><table class="txt">
+      <thead><tr><th class="c-sel"><input type="checkbox" id="selAll" title="Alle sichtbaren auswählen"></th><th>Datum</th>${S.acc === 'alle' ? '<th>Konto</th>' : ''}<th>Empfänger / Auftraggeber</th><th>Verwendungszweck</th><th class="num">Betrag</th><th>Kategorie</th><th></th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>${list.length > 600 ? '<p class="muted">Die ersten 600 werden angezeigt – Filter eingrenzen.</p>' : ''}`
       : `<p class="muted">${S.f.cat === 'offen' ? 'Alles zugeordnet. 👌' : 'Keine Buchungen für diesen Filter.'}</p>`}
   </div>`;
@@ -467,8 +478,8 @@ function viewYear() {
       if (!total(cs.map(Math.abs))) continue;
       sec = add(sec, cs);
       const open = S.expanded.has(c.id);
-      rowsHtml += line('cat clickable', `${open ? '▾' : '▸'} ${esc(c.name)}`, cs, `data-exp="${c.id}"`, c.id);
-      if (open) subs.forEach(s => { if (agg.has(s.id)) rowsHtml += line('sub', esc(s.name), agg.get(s.id), '', 'sub:' + s.id); });
+      rowsHtml += line('cat clickable', `${open ? '▾' : '▸'} ${esc(c.name)} <button class="icon trend" data-trend="cat:${c.id}" title="Verlauf">📈</button>`, cs, `data-exp="${c.id}"`, c.id);
+      if (open) subs.forEach(s => { if (agg.has(s.id)) rowsHtml += line('sub', `${esc(s.name)} <button class="icon trend" data-trend="sub:${s.id}" title="Verlauf">📈</button>`, agg.get(s.id), '', 'sub:' + s.id); });
     }
     const none = kind === 'umbuchung' ? null : agg.get(flip < 0 ? 'none-' : 'none+');
     if (none) { sec = add(sec, none); rowsHtml += line('cat', '<span class="state offen">nicht zugeordnet</span>', none, '', 'offen'); }
@@ -483,8 +494,8 @@ function viewYear() {
     <div class="filters"><h2 style="margin:0">Übersicht</h2>
       <select id="ySel">${ys.map(v => `<option${v === year ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
     ${resultTiles(year)}
-    <p class="muted" style="margin:16px 0 8px">Ausgaben positiv · Umbuchungen mit Vorzeichen · Kategorie anklicken = Unterkategorien · Betrag anklicken = Buchungen</p>
-    <div class="tablewrap"><table>
+    <p class="muted" style="margin:16px 0 8px">Ausgaben positiv · Umbuchungen mit Vorzeichen · Kategorie anklicken = Unterkategorien · Betrag anklicken = Buchungen · 📈 = Verlauf</p>
+    <div class="tablewrap"><table class="ytable">
       <thead><tr><th></th>${MONTHS.map(m => `<th class="num">${m}</th>`).join('')}<th class="num">Jahr</th><th class="num">Ø Monat</th></tr></thead>
       <tbody>${inc.html}${exp.html}${umb.html}
       <tr class="total"><td>Saldo</td>${saldo.map(v => `<td class="num ${sign(v)}">${v ? eur(v) : '<span class="muted">–</span>'}</td>`).join('')}<td class="num ${sign(total(saldo))}">${eur(total(saldo))}</td><td class="num muted">${eur(total(saldo) / monthsWithData)}</td></tr>
@@ -563,18 +574,20 @@ function viewCats() {
   const cards = shown.map(c => `<div class="card catcard">
       <div class="cathead">
         <h2 class="name" title="${esc(c.name)}">${esc(c.name)}</h2>${badge(catCnt(c), c.id)}
-        <span class="acts"><button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button></span>
+        <span class="acts"><button class="icon" data-trend="cat:${c.id}" title="Verlauf">📈</button><button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button></span>
       </div>
       <div class="catmeta"><span class="kind" style="margin:0">${KIND[c.kind] || c.kind}</span>${scopeSel(c)}<span class="move"><button class="icon" data-catmove="${c.id}|-1" title="Nach vorne"${S.cats[0] === c ? ' disabled' : ''}>◀</button><button class="icon" data-catmove="${c.id}|1" title="Nach hinten"${S.cats[S.cats.length - 1] === c ? ' disabled' : ''}>▶</button></span></div>
+      ${c.kind === 'ausgabe' ? `<label class="catmeta muted" style="font-size:12px">Budget pro Monat <input class="budget" data-budget="${c.id}" inputmode="decimal" placeholder="kein" value="${c.budget != null ? String(c.budget).replace('.', ',') : ''}"> €</label>` : ''}
       <div class="sublist">${S.subs.filter(s => s.category_id === c.id).map(s => `<div class="subrow${catVisible(s, S.acc) ? '' : ' dim'}">
         <span class="n" title="${esc(s.name)}">${esc(s.name)}${tag(s)}</span>${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}
-        <button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}" title="Löschen">×</button></div>`).join('')}</div>
+        <button class="icon" data-trend="sub:${s.id}" title="Verlauf">📈</button><button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}" title="Löschen">×</button></div>`).join('')}</div>
       <button class="ghost addsub" data-addsub="${c.id}">+ Unterkategorie</button></div>`).join('');
   const rules = [...S.rules.values()].filter(r => r.subcategory_id).sort((a, b) => a.match_key.localeCompare(b.match_key));
-  const accCard = `<div class="card"><div class="filters"><h2 style="margin:0">Konten</h2>
+  const anchors = `<div class="filters" style="margin-bottom:12px">${[['s-konten', 'Konten'], ['s-kat', 'Kategorien'], ['s-regeln', 'Regeln'], ['s-daten', 'Daten & Backup']].map(([id, l]) => `<button class="ghost" data-jump="${id}">${l}</button>`).join('')}</div>`;
+  const accCard = anchors + `<div class="card" id="s-konten"><div class="filters"><h2 style="margin:0">Konten</h2>
       ${S.accounts.map(a => `<span class="chip">${esc(a.name)} <span class="muted">(${S.txs.filter(t => t.account_id === a.id).length})</span><button class="icon" data-renacc="${a.id}">✎</button><button class="icon" data-delacc="${a.id}">×</button></span>`).join('')}
       <button class="ghost" id="addAcc">+ Konto</button></div></div>`;
-  return accCard + `<div class="card"><div class="filters"><h2 style="margin:0">Kategorien</h2>
+  return accCard + `<div class="card" id="s-kat"><div class="filters"><h2 style="margin:0">Kategorien</h2>
       <input id="newCat" placeholder="Neue Kategorie"><select id="newKind"><option value="ausgabe">Ausgabe</option><option value="einnahme">Einnahme</option><option value="umbuchung">Umbuchung</option></select>
       <select id="newScope"><option value="">alle Konten</option>${S.accounts.map(a => `<option value="${a.id}"${S.acc === a.id ? ' selected' : ''}>nur ${esc(a.name)}</option>`).join('')}</select>
       <button class="btn" id="addCat">Anlegen</button>
@@ -584,14 +597,15 @@ function viewCats() {
     ${hidden.length ? `<div class="card" style="margin-top:16px"><h2>Für „${esc(accById(S.acc)?.name)}" ausgeblendet (${hidden.length})</h2>
       <p class="muted" style="margin-top:-6px">Diese Kategorien gelten nur für ein anderes Konto. Zum Einblenden auf „alle Konten" oder dieses Konto stellen.</p>
       <div class="filters">${hidden.map(c => `<span class="chip" style="padding-right:6px">${esc(c.name)} ${scopeSel(c)}</span>`).join('')}</div></div>` : ''}
-    ${viewUserRules()}
+    <div id="s-regeln">${viewUserRules()}</div>
     <div class="card" style="margin-top:16px"><h2>Gelernte Regeln (${rules.length})</h2>
       <p class="muted">Entstehen automatisch, wenn du eine Buchung zuordnest. Löschen = App vergisst diese Zuordnung.</p>
       ${rules.length ? `<div class="tablewrap"><table><thead><tr><th>Erkennung</th><th>Anzeigename</th><th>Kategorie</th><th class="num">Treffer</th><th></th></tr></thead><tbody>
       ${rules.map(r => { const s = subById(r.subcategory_id); return `<tr><td class="num" style="text-align:left">${esc(r.match_key)}</td><td>${esc(r.payee || '')}</td>
         <td>${s ? esc(catById(s.category_id)?.name + ' › ' + s.name) : '<span class="muted">–</span>'}</td><td class="num">${r.hits}</td>
         <td><button class="icon" data-delrule="${r.id}">×</button></td></tr>`; }).join('')}</tbody></table></div>` : ''}
-    </div>`;
+    </div>
+    ${viewData()}`;
 }
 
 // ---------- Neu anlegen aus der Buchungsliste ----------
@@ -847,6 +861,7 @@ function openEditDialog(id) {
   $('#edPayee').value = t.payee; $('#edPurpose').value = t.purpose;
   $('#edAcc').innerHTML = S.accounts.map(a => `<option value="${a.id}"${a.id === t.account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
   $('#edSub').innerHTML = subOptions(t.subcategory_id, false, t.account_id);
+  $('#edTags').value = (t.tags || []).join(', '); $('#edNote').value = t.note || '';
   $('#editDlg').showModal();
 }
 async function submitEditDialog() {
@@ -856,15 +871,340 @@ async function submitEditDialog() {
   const patch = { booking_date: $('#edDate').value, amount, purpose: $('#edPurpose').value.trim(), account_id: $('#edAcc').value };
   // Kontowechsel: Fingerabdruck mitziehen, damit ein späterer Import ins neue Konto nicht doppelt
   if (patch.account_id !== t.account_id) patch.hash = patch.account_id + '|' + t.hash.slice(t.hash.indexOf('|') + 1);
+  const tags = parseTags($('#edTags').value), note = $('#edNote').value.trim() || null;
+  if (note !== (t.note || null) || tags.join('|') !== (t.tags || []).join('|')) Object.assign(patch, { tags, note });
   const payee = $('#edPayee').value, sub = $('#edSub').value || null;
   $('#editDlg').close(); edId = null;
-  await updateTxs([t.id], patch);
+  try { await updateTxs([t.id], patch); } catch (e) { throw mig7(e); }
   if (payee.trim() && payee.trim() !== t.payee) await setPayee(t.id, payee);
   if (sub !== t.subcategory_id) await setCategory(t.id, sub);
   else { toast('Gespeichert'); render(); }
 }
 $('#editForm').addEventListener('submit', e => { e.preventDefault(); submitEditDialog().catch(fail); });
 $('#edCancel').onclick = () => { $('#editDlg').close(); edId = null; };
+
+// ---------- Navigation (Zurück-Taste, Verlauf) ----------
+function snapshot() { return { view: S.view, f: { ...S.f }, yearSel: S.yearSel, from: S.from, homeMonth: S.homeMonth }; }
+function go(view, opts = {}) {
+  try { history.replaceState({ ...snapshot(), scroll: window.scrollY }, '', '#' + S.view); } catch {}
+  S.view = view;
+  if (opts.f) S.f = { ...F0, ...opts.f };
+  if (opts.yearSel) S.yearSel = opts.yearSel;
+  S.from = opts.from || null;
+  S.sel.clear();
+  try { history.pushState(snapshot(), '', '#' + view); } catch {}
+  render(); window.scrollTo(0, 0);
+}
+window.addEventListener('popstate', e => {
+  const st = e.state; if (!st || !st.view) return;
+  Object.assign(S, { view: st.view, f: { ...F0, ...st.f }, yearSel: st.yearSel, from: st.from || null, homeMonth: st.homeMonth || S.homeMonth });
+  S.sel.clear(); render();
+  requestAnimationFrame(() => window.scrollTo(0, st.scroll || 0));
+});
+// Adresse direkt geändert (z. B. Lesezeichen, #tx eingetippt)
+window.addEventListener('hashchange', () => {
+  const h = location.hash.slice(1);
+  if (h !== S.view && ['home', 'tx', 'year', 'compare', 'fix', 'cats', 'import'].includes(h) && !history.state?.view) {
+    S.view = h; S.from = null; S.sel.clear();
+    try { history.replaceState(snapshot(), '', '#' + h); } catch {}
+    render();
+  }
+});
+const backBar = () => S.from ? `<div class="backbar"><button data-back>← ${esc(S.from)}</button></div>` : '';
+const FROM = { home: 'Zurück zur Übersicht', year: () => `Zurück zur Jahresübersicht ${S.yearSel}`, cats: 'Zurück zu Einstellungen', fix: 'Zurück zu Fixkosten', compare: 'Zurück zum Vergleich' };
+const fromLabel = () => { const f = FROM[S.view]; return typeof f === 'function' ? f() : f || null; };
+
+// ---------- Tags ----------
+const allTags = () => [...new Set(S.txs.flatMap(t => t.tags || []))].sort((a, b) => a.localeCompare(b, 'de'));
+const parseTags = v => [...new Set((v || '').split(',').map(x => x.trim().replace(/^#/, '')).filter(Boolean))];
+
+// ---------- Mehrfachauswahl ----------
+function renderBulk() {
+  const bar = $('#bulkbar');
+  if (S.view !== 'tx' || !S.sel.size) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+  const sel = S.txs.filter(t => S.sel.has(t.id)), sum = sel.reduce((a, t) => a + t.amount, 0);
+  bar.innerHTML = `<b>${sel.length} ausgewählt</b><span class="num">${eur(sum)}</span>
+    <select id="bulkSub">${subOptions(null, false, S.acc).replace('<option value="">– offen –</option>', '<option value="">Kategorie wählen…</option><option value="__open">– auf offen setzen –</option>')}</select>
+    <button class="btn small" id="bulkAssign">Zuordnen</button>
+    <input id="bulkTag" list="tagList" placeholder="Tag" style="width:120px"><button class="ghost" id="bulkTagAdd">+ Tag</button>
+    <button class="ghost" id="bulkDel">Löschen</button><button class="ghost" id="bulkClear" title="Auswahl aufheben">✕</button>`;
+  bar.classList.remove('hidden');
+}
+async function bulkAssign() {
+  const v = $('#bulkSub').value; if (!v) return toast('Bitte Kategorie wählen');
+  const sel = S.txs.filter(t => S.sel.has(t.id));
+  if (v === '__open') { await updateTxs(sel.map(t => t.id), { subcategory_id: null, assign_state: null }); toast(`${sel.length} Buchung(en) auf offen gesetzt`); }
+  else {
+    const ok = sel.filter(t => subAllowed(v, t.account_id)), skip = sel.length - ok.length;
+    await updateTxs(ok.map(t => t.id), { subcategory_id: v, assign_state: 'manuell' });
+    toast(`${ok.length} Buchung(en) zugeordnet${skip ? ` – ${skip} übersprungen (Kategorie für deren Konto ausgeblendet)` : ''}`);
+  }
+  S.sel.clear(); render();
+}
+async function bulkTag() {
+  const tags = parseTags($('#bulkTag').value); if (!tags.length) return $('#bulkTag').focus();
+  const sel = S.txs.filter(t => S.sel.has(t.id));
+  for (let i = 0; i < sel.length; i += 20) {
+    await Promise.all(sel.slice(i, i + 20).map(async t => {
+      const next = [...new Set([...(t.tags || []), ...tags])];
+      const { error } = await sb.from('transactions').update({ tags: next }).eq('id', t.id);
+      if (error) throw mig7(error);
+      t.tags = next;
+    }));
+  }
+  toast(`Tag ${tags.map(g => '#' + g).join(' ')} bei ${sel.length} Buchung(en) gesetzt`); render();
+}
+async function bulkDelete() {
+  const ids = [...S.sel];
+  if (!confirm(`${ids.length} Buchung(en) endgültig löschen?\n\nBeim nächsten Import derselben Datei würden sie wieder auftauchen.`)) return;
+  for (let i = 0; i < ids.length; i += 200) {
+    const { error } = await sb.from('transactions').delete().in('id', ids.slice(i, i + 200));
+    if (error) throw error;
+  }
+  S.txs = S.txs.filter(t => !S.sel.has(t.id)); S.sel.clear(); toast(`${ids.length} gelöscht`); render();
+}
+
+// ---------- Übersicht (Startseite) ----------
+const ymOf = d => d.slice(0, 7);
+const ymAdd = (ym, n) => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+const ymLabel = ym => `${['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'][+ym.slice(5) - 1]} ${ym.slice(0, 4)}`;
+function kindOf(t) {
+  const c = t.subcategory_id && t.assign_state !== 'vorschlag' ? catOfTx(t) : null;
+  return c ? c.kind : (t.amount < 0 ? 'ausgabe' : 'einnahme');
+}
+function periodResult(list) {
+  const r = { inc: 0, exp: 0, umb: 0 };
+  for (const t of list) { const k = kindOf(t); if (k === 'umbuchung') r.umb += t.amount; else if (k === 'einnahme') r.inc += t.amount; else r.exp -= t.amount; }
+  r.result = r.inc - r.exp; return r;
+}
+function barRow({ label, value, budget, max, click, trend, sub }) {
+  const ratio = budget ? value / budget : (max ? value / max : 0);
+  const cls = budget ? (ratio > 1 ? 'over' : ratio > 0.8 ? 'warn' : '') : '';
+  const fill = Math.min(100, Math.max(0, ratio * 100));
+  return `<div class="bar"><div class="bl"><span><button class="linkbtn" ${click}>${label}</button>${trend ? ` <button class="icon trend" data-trend="${trend}" title="Verlauf">📈</button>` : ''}</span>
+    <span class="bv">${eur(value)}${budget ? ` <span class="muted">von ${eur(budget)}</span>` : ''}</span></div>
+    <div class="bt"><div class="bf ${cls}" style="width:${fill}%;${budget ? '' : 'opacity:.55'}"></div></div>${sub ? `<div class="note">${sub}</div>` : ''}</div>`;
+}
+function viewHome() {
+  const all = scoped();
+  if (!all.length) return `<div class="card"><h2>Willkommen</h2><p>Noch keine Buchungen. Starte mit dem Import deiner DKB-CSV.</p><button class="btn" data-view="import">Jetzt importieren</button></div>`;
+  const latest = all.reduce((m, t) => t.booking_date > m ? t.booking_date : m, '0000');
+  if (!S.homeMonth) S.homeMonth = ymOf(latest);
+  const ym = S.homeMonth, y = +ym.slice(0, 4), mNum = +ym.slice(5);
+  const inMonth = all.filter(t => ymOf(t.booking_date) === ym), prev = all.filter(t => ymOf(t.booking_date) === ymAdd(ym, -1));
+  const r = periodResult(inMonth), p = periodResult(prev), hasPrev = prev.length > 0;
+  const tile = (label, k, better, main) => `<div class="tile${main ? ' main' : ''}"><div class="tl">${label}</div><div class="tv ${k === 'result' ? sign(r[k]) : ''}">${eur(r[k])}</div>
+    ${hasPrev ? `<div class="td">${deltaTxt(k, r[k], p[k], better)} <span class="muted">vs. Vormonat</span></div>` : ''}</div>`;
+  const open = all.filter(t => !t.subcategory_id || t.assign_state === 'vorschlag').length;
+  // Ausgaben je Kategorie im Monat + Budgets
+  const spent = new Map(), ytd = new Map();
+  for (const t of all) {
+    const c = t.subcategory_id && t.assign_state !== 'vorschlag' ? catOfTx(t) : null;
+    if (!c || c.kind !== 'ausgabe') continue;
+    if (ymOf(t.booking_date) === ym) spent.set(c.id, (spent.get(c.id) || 0) - t.amount);
+    if (+t.booking_date.slice(0, 4) === y && +t.booking_date.slice(5, 7) <= mNum) ytd.set(c.id, (ytd.get(c.id) || 0) - t.amount);
+  }
+  const unassigned = -inMonth.filter(t => kindOf(t) === 'ausgabe' && !(t.subcategory_id && t.assign_state !== 'vorschlag')).reduce((a, t) => a + t.amount, 0);
+  const expCats = S.cats.filter(c => c.kind === 'ausgabe' && (spent.get(c.id) || c.budget > 0))
+    .sort((a, b) => (spent.get(b.id) || 0) - (spent.get(a.id) || 0));
+  const maxSpent = Math.max(1, ...expCats.map(c => spent.get(c.id) || 0));
+  const bars = expCats.map(c => barRow({ label: esc(c.name), value: spent.get(c.id) || 0, budget: c.budget > 0 ? +c.budget : null, max: maxSpent,
+    click: `data-hometx="${c.id}"`, trend: 'cat:' + c.id,
+    sub: c.budget > 0 ? `${y} bis ${MONTHS[mNum - 1]}: ${eur(ytd.get(c.id) || 0)} von ${eur(c.budget * mNum)}` : '' })).join('');
+  const budgetSum = S.cats.filter(c => c.kind === 'ausgabe' && c.budget > 0).reduce((a, c) => a + +c.budget, 0);
+  // Fixkosten-Kurzinfo
+  const fx = detectRecurring().filter(x => x.active);
+  const fxOut = fx.filter(x => x.kind === 'ausgabe'), fxMonth = fxOut.reduce((a, x) => a + x.perMonth, 0);
+  // Tags
+  const tagStats = allTags().map(g => { const l = all.filter(t => (t.tags || []).includes(g)); return { g, n: l.length, sum: l.reduce((a, t) => a + t.amount, 0) }; });
+  const recent = all.slice().sort((a, b) => b.booking_date.localeCompare(a.booking_date)).slice(0, 8);
+  return `<div class="filters"><div class="monthnav"><button class="icon" data-hm="-1" title="Vormonat">◀</button><b>${ymLabel(ym)}</b><button class="icon" data-hm="1" title="Nächster Monat"${ym >= ymOf(latest) ? ' disabled' : ''}>▶</button></div>
+      <span class="muted">${inMonth.length} Buchungen</span></div>
+    ${open ? `<div class="callout"><span><b>${open}</b> Buchung(en) noch nicht zugeordnet.</span><button class="btn small" data-gotx="offen">Jetzt zuordnen</button></div>` : ''}
+    <div class="card"><div class="tiles" style="margin-top:0">${tile('Einnahmen', 'inc', true)}${tile('Ausgaben', 'exp', false)}${tile('Ergebnis', 'result', true, true)}${tile('Umbuchungen', 'umb', null)}</div></div>
+    <div class="grid2">
+      <div class="card"><div class="filters"><h2 style="margin:0">Ausgaben nach Kategorie</h2><span class="spacer" style="flex:1"></span>${budgetSum ? `<span class="muted">Budgets: ${eur(budgetSum)}/Monat</span>` : ''}</div>
+        <div class="bars">${bars || '<p class="muted">Keine zugeordneten Ausgaben in diesem Monat.</p>'}
+        ${unassigned > 0 ? barRow({ label: '<span class="state offen">nicht zugeordnet</span>', value: unassigned, max: maxSpent, click: `data-gotx="offen"` }) : ''}</div>
+        ${budgetSum ? '' : '<p class="muted" style="margin-bottom:0">Tipp: Unter Einstellungen → Kategorien kannst du pro Kategorie ein Monatsbudget setzen.</p>'}</div>
+      <div>
+        <div class="card"><div class="filters"><h2 style="margin:0">Fixkosten & Abos</h2><span class="spacer" style="flex:1"></span><button class="linkbtn" data-view="fix">alle anzeigen →</button></div>
+          ${fxOut.length ? `<p style="margin:0 0 10px"><b class="num">${eur(fxMonth)}</b> pro Monat · <b class="num">${eur(fxMonth * 12)}</b> pro Jahr · ${fxOut.length} Posten</p>
+          <div class="bars">${fxOut.slice(0, 5).map(x => barRow({ label: esc(x.payee), value: x.perMonth, max: fxOut[0].perMonth, click: `data-fixtx="${x.id}"`, sub: `${x.interval} · ${eur(x.amount)}` })).join('')}</div>`
+          : '<p class="muted" style="margin:0">Noch keine wiederkehrenden Zahlungen erkannt – dafür braucht es ein paar Monate Daten.</p>'}</div>
+        ${tagStats.length ? `<div class="card"><h2>Tags</h2><div class="bars">${tagStats.map(x => `<div class="bl" style="display:flex;justify-content:space-between"><button class="linkbtn" data-tagf="${esc(x.g)}">#${esc(x.g)}</button><span class="num">${x.n} · <b class="${sign(x.sum)}">${eur(x.sum)}</b></span></div>`).join('')}</div></div>` : ''}
+        <div class="card"><h2>Letzte Buchungen</h2>${recent.map(t => `<div class="bl" style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid var(--line)">
+          <button class="linkbtn" data-edit="${t.id}" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${fmtDate(t.booking_date).slice(0, 6)} ${esc(t.payee || t.counterparty_raw || '–')}</button>
+          <span class="num ${sign(t.amount)}">${eur(t.amount)}</span></div>`).join('')}</div>
+      </div>
+    </div>`;
+}
+
+// ---------- Fixkosten & Abos ----------
+const INTERVALS = [['monatlich', 1, 25, 36, 3], ['vierteljährlich', 3, 80, 100, 2], ['halbjährlich', 6, 170, 200, 2], ['jährlich', 12, 345, 390, 2]];
+let fxCache = null;
+function detectRecurring() {
+  const sig = S.acc + '|' + S.txs.length + '|' + S.txs.reduce((a, t) => a + (t.subcategory_id ? 1 : 0), 0);
+  if (fxCache?.sig === sig) return fxCache.list;
+  const all = scoped(), latest = all.reduce((m, t) => t.booking_date > m ? t.booking_date : m, '0000');
+  const latestMs = Date.parse(latest), day = 864e5;
+  // 1) nach Händler gruppieren, 2) innerhalb nach ähnlichem Betrag (±12 %) bündeln
+  const groups = new Map();
+  for (const t of all) {
+    if (kindOf(t) === 'umbuchung' && !t.subcategory_id) continue;
+    const k = (keyOf(t) || 'p:' + (t.payee || '').toLowerCase()) + '|' + t.account_id + '|' + (t.amount < 0 ? '-' : '+');
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(t);
+  }
+  const out = [];
+  for (const [k, list] of groups) {
+    if (list.length < 2) continue;
+    // Häufiger Händler (z. B. Supermarkt): nur fast identische Beträge zählen als Abo/Vertrag
+    const freq = list.length / new Set(list.map(t => ymOf(t.booking_date))).size;
+    const frequent = freq > 1.5, tol = frequent ? 0 : 0.12, abs0 = frequent ? 0.005 : 0.5;
+    const clusters = [];
+    for (const t of list.slice().sort((a, b) => a.booking_date.localeCompare(b.booking_date))) {
+      const c = clusters.find(c => Math.abs(Math.abs(t.amount) - Math.abs(c.last)) <= Math.abs(c.last) * tol + abs0);
+      if (c) { c.items.push(t); c.last = t.amount; } else clusters.push({ items: [t], last: t.amount });
+    }
+    for (const c of clusters) {
+      const it = c.items; if (it.length < 2) continue;
+      const months = new Set(it.map(t => ymOf(t.booking_date)));
+      if (months.size < it.length * 0.8) continue;           // mehrfach pro Monat → kein Abo
+      const gaps = it.slice(1).map((t, i) => (Date.parse(t.booking_date) - Date.parse(it[i].booking_date)) / day).sort((a, b) => a - b);
+      const med = gaps[Math.floor(gaps.length / 2)];
+      const iv = INTERVALS.find(([, , lo, hi, min]) => med >= lo && med <= hi && it.length >= (frequent ? Math.max(3, min) : min));
+      if (!iv) continue;
+      const fit = gaps.filter(g => g >= iv[2] * 0.8 && g <= iv[3] * 1.25).length / gaps.length;
+      if (fit < 0.6) continue;
+      const lastT = it[it.length - 1], amount = Math.abs(lastT.amount);
+      const daysSince = (latestMs - Date.parse(lastT.booking_date)) / day;
+      const active = daysSince <= iv[1] * 30.5 * 1.5 + 5;
+      const next = new Date(Date.parse(lastT.booking_date)); next.setMonth(next.getMonth() + iv[1]);
+      out.push({ id: k + '#' + it[0].id, kind: kindOf(lastT), payee: lastT.payee || lastT.counterparty_raw, account_id: lastT.account_id,
+        sub: lastT.assign_state !== 'vorschlag' ? lastT.subcategory_id : null, interval: iv[0], months: iv[1], amount,
+        perMonth: amount / iv[1], count: it.length, last: lastT.booking_date, next: next.toISOString().slice(0, 10), active, ids: it.map(t => t.id) });
+    }
+  }
+  out.sort((a, b) => b.perMonth - a.perMonth);
+  fxCache = { sig, list: out };
+  return out;
+}
+function viewFix() {
+  const list = detectRecurring(), show = list.filter(x => x.active || S.showEnded);
+  const sec = (kind, title) => {
+    const l = show.filter(x => x.kind === kind); if (!l.length) return '';
+    const act = l.filter(x => x.active), pm = act.reduce((a, x) => a + x.perMonth, 0);
+    return `<div class="card"><div class="filters"><h2 style="margin:0">${title}</h2><span class="spacer" style="flex:1"></span>
+        <span><b class="num">${eur(pm)}</b> / Monat · <b class="num">${eur(pm * 12)}</b> / Jahr</span></div>
+      <div class="tablewrap"><table><thead><tr><th>Empfänger</th><th>Kategorie</th><th>Intervall</th><th class="num">Betrag</th><th class="num">pro Monat</th><th class="num">pro Jahr</th><th class="num">zuletzt</th><th class="num">nächste</th><th class="num">Anzahl</th></tr></thead>
+      <tbody>${l.map(x => { const s = subById(x.sub); return `<tr${x.active ? '' : ' style="opacity:.5"'}>
+        <td><button class="linkbtn" data-fixtx="${esc(x.id)}">${esc(x.payee)}</button>${S.acc === 'alle' ? ` <span class="tag">${esc(accById(x.account_id)?.name || '')}</span>` : ''}${x.active ? '' : ' <span class="tag">beendet?</span>'}</td>
+        <td class="muted">${s ? esc(catById(s.category_id)?.name + ' › ' + s.name) : '<span class="state offen">offen</span>'}</td>
+        <td>${x.interval}</td><td class="num">${eur(x.amount)}</td><td class="num">${eur(x.perMonth)}</td><td class="num">${eur(x.perMonth * 12)}</td>
+        <td class="num muted">${fmtDate(x.last)}</td><td class="num muted">${x.active ? fmtDate(x.next) : '–'}</td><td class="num muted">${x.count}×</td></tr>`; }).join('')}</tbody></table></div></div>`;
+  };
+  const out = list.filter(x => x.active && x.kind === 'ausgabe').reduce((a, x) => a + x.perMonth, 0);
+  const inc = list.filter(x => x.active && x.kind === 'einnahme').reduce((a, x) => a + x.perMonth, 0);
+  // Ø Monatsausgaben der letzten 12 Monate
+  const all = scoped(), latest = all.reduce((m, t) => t.booking_date > m ? t.booking_date : m, '0000');
+  const from = latest === '0000' ? '' : ymAdd(ymOf(latest), -11);
+  const last12 = all.filter(t => ymOf(t.booking_date) >= from), nM = Math.max(1, new Set(last12.map(t => ymOf(t.booking_date))).size);
+  const avgExp = periodResult(last12).exp / nM;
+  return `<div class="card"><div class="filters"><h2 style="margin:0">Fixkosten & Abos</h2><span class="spacer" style="flex:1"></span>
+      <label class="muted" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="fxEnded"${S.showEnded ? ' checked' : ''}> auch beendete zeigen</label></div>
+    <div class="tiles" style="margin-top:0">
+      <div class="tile main"><div class="tl">Fixkosten pro Monat</div><div class="tv">${eur(out)}</div><div class="td muted">${eur(out * 12)} pro Jahr</div></div>
+      <div class="tile"><div class="tl">Anteil an Ø Monatsausgaben</div><div class="tv">${pct(avgExp ? out / avgExp : null)}</div><div class="td muted">Ø ${eur(avgExp)} / Monat (12 Mon.)</div></div>
+      <div class="tile"><div class="tl">Regelmäßige Einnahmen</div><div class="tv">${eur(inc)}</div><div class="td muted">pro Monat</div></div>
+      <div class="tile"><div class="tl">Frei nach Fixkosten</div><div class="tv ${sign(inc - out)}">${eur(inc - out)}</div><div class="td muted">pro Monat</div></div>
+    </div>
+    <p class="muted" style="margin:10px 0 0;font-size:12px">Automatisch erkannt: gleicher Empfänger, ähnlicher Betrag (±12 %), regelmäßiger Abstand (monatlich, vierteljährlich, halbjährlich, jährlich). „beendet?" = zuletzt deutlich länger als ein Intervall her. Name anklicken = zugehörige Buchungen.</p></div>
+    ${sec('ausgabe', 'Regelmäßige Ausgaben')}${sec('einnahme', 'Regelmäßige Einnahmen')}${sec('umbuchung', 'Regelmäßige Umbuchungen')}
+    ${show.length ? '' : '<div class="card muted">Noch keine wiederkehrenden Zahlungen erkannt – dafür braucht es einige Monate an Buchungen.</div>'}`;
+}
+
+// ---------- Verlauf pro Kategorie ----------
+let trChart = null, trKey = null;
+function openTrend(key) { trKey = key; $('#trendDlg').showModal(); drawTrend(); }
+function drawTrend() {
+  const [type, id] = trKey.split(':');
+  const c = type === 'cat' ? catById(id) : catById(subById(id)?.category_id), s = type === 'sub' ? subById(id) : null;
+  const flip = c?.kind === 'ausgabe' ? -1 : 1;
+  $('#trTitle').textContent = s ? `${c.name} › ${s.name}` : c.name;
+  const match = t => t.assign_state !== 'vorschlag' && (s ? t.subcategory_id === s.id : catOfTx(t)?.id === c.id);
+  const all = scoped(); if (!all.length) return;
+  const dates = all.map(t => t.booking_date).sort();
+  let first = ymOf(dates[0]); const last = ymOf(dates[dates.length - 1]);
+  const range = $('#trRange').value;
+  if (range !== 'all') { const f = ymAdd(last, -(+range - 1)); if (f > first) first = f; }
+  const months = []; for (let m = first; m <= last; m = ymAdd(m, 1)) months.push(m);
+  const sums = new Map(months.map(m => [m, 0]));
+  all.forEach(t => { const m = ymOf(t.booking_date); if (sums.has(m) && match(t)) sums.set(m, sums.get(m) + flip * t.amount); });
+  const vals = months.map(m => Math.round(sums.get(m) * 100) / 100);
+  const avg = vals.map((_, i) => { const w = vals.slice(Math.max(0, i - 2), i + 1); return Math.round(w.reduce((a, b) => a + b, 0) / w.length * 100) / 100; });
+  const css = getComputedStyle(document.documentElement), col = n => css.getPropertyValue(n).trim();
+  if (trChart) trChart.destroy();
+  if (window.Chart) trChart = new Chart($('#trChart'), {
+    data: { labels: months.map(m => `${MONTHS[+m.slice(5) - 1]} ${m.slice(2, 4)}`), datasets: [
+      { type: 'bar', label: 'Monat', data: vals, backgroundColor: col('--accent') + 'aa', borderRadius: 3 },
+      { type: 'line', label: 'Ø 3 Monate', data: avg, borderColor: col('--warn'), backgroundColor: col('--warn'), pointRadius: 0, tension: .3 }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { labels: { color: col('--ink') } }, tooltip: { callbacks: { label: x => `${x.dataset.label}: ${eur(x.raw)}` } } },
+      scales: { x: { ticks: { color: col('--muted'), maxRotation: 0, autoSkip: true }, grid: { display: false } },
+        y: { ticks: { color: col('--muted'), callback: v => eur(v) }, grid: { color: col('--line') } } } } });
+  // Jahressummen (immer alle Jahre)
+  const byY = new Map();
+  all.forEach(t => { if (match(t)) { const y = t.booking_date.slice(0, 4); byY.set(y, (byY.get(y) || 0) + flip * t.amount); } });
+  const ys = [...byY.keys()].sort();
+  $('#trYears').innerHTML = ys.length ? `<table><thead><tr><th>Jahr</th>${ys.map(y => `<th class="num">${y}</th>`).join('')}</tr></thead><tbody>
+    <tr><td>Summe</td>${ys.map(y => `<td class="num">${eur(byY.get(y))}</td>`).join('')}</tr>
+    <tr><td class="muted">Ø Monat</td>${ys.map(y => `<td class="num muted">${eur(byY.get(y) / (lastMonthOf(+y) || 12))}</td>`).join('')}</tr></tbody></table>` : '<p class="muted">Keine Buchungen.</p>';
+}
+$('#trRange').addEventListener('change', drawTrend);
+$('#trendDlg').addEventListener('close', () => { if (trChart) { trChart.destroy(); trChart = null; } });
+
+// ---------- Export & Backup ----------
+function download(name, content, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+function exportCsv(list, name) {
+  const q = v => { v = String(v ?? ''); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const head = ['Datum', 'Konto', 'Empfänger', 'Verwendungszweck', 'Betrag', 'Kategorie', 'Unterkategorie', 'Typ', 'Status', 'Tags', 'Notiz', 'Original-Empfänger', 'IBAN'];
+  const rows = list.slice().sort((a, b) => a.booking_date.localeCompare(b.booking_date)).map(t => {
+    const s = t.assign_state !== 'vorschlag' ? subById(t.subcategory_id) : null, c = s ? catById(s.category_id) : null;
+    return [fmtDate(t.booking_date), accById(t.account_id)?.name, t.payee, t.purpose, t.amount.toFixed(2).replace('.', ','), c?.name, s?.name,
+      c?.kind || '', t.subcategory_id ? t.assign_state : 'offen', (t.tags || []).join(', '), t.note, t.counterparty_raw, t.iban].map(q).join(';');
+  });
+  download(name, '﻿' + [head.join(';'), ...rows].join('\r\n'), 'text/csv;charset=utf-8');
+  toast(`${list.length} Buchungen exportiert`);
+}
+function exportBackup() {
+  const data = { app: 'Haushaltsbuch', version: 1, exported_at: new Date().toISOString(), accounts: S.accounts, categories: S.cats,
+    subcategories: S.subs, transactions: S.txs, rules: [...S.rules.values()], user_rules: S.userRules };
+  download(`haushaltsbuch-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 1), 'application/json');
+  toast('Backup heruntergeladen');
+}
+const stamp = () => new Date().toISOString().slice(0, 10);
+function viewData() {
+  return `<div class="card" id="s-daten" style="margin-top:16px"><h2>Daten & Backup</h2>
+    <div class="filters"><button class="btn" id="csvAll">⬇ Alle Buchungen als CSV (Excel)</button><button class="ghost" id="backupJson">⬇ Komplett-Backup (JSON)</button></div>
+    <p class="muted" style="margin:0">CSV: alle Konten, mit Kategorie, Tags und Notizen – öffnet direkt in Excel. Backup: alles inkl. Kategorien und Regeln, als Sicherung zum Aufheben.
+    Hinweis: Supabase pausiert kostenlose Projekte nach etwa einer Woche ohne Nutzung. Die Daten bleiben erhalten, das Projekt muss dann im Supabase-Dashboard wieder gestartet werden.</p></div>`;
+}
+
+// ---------- Budget speichern ----------
+async function saveBudget(id, val) {
+  const c = catById(id), v = val.trim() === '' ? null : num(val);
+  if (v !== null && (isNaN(v) || v < 0)) { toast('Budget ungültig'); return render(); }
+  const { error } = await sb.from('categories').update({ budget: v }).eq('id', id);
+  if (error) { render(); throw mig7(error); }
+  c.budget = v; toast(v ? `Budget ${c.name}: ${eur(v)} pro Monat` : `Budget ${c.name} entfernt`);
+}
+
+// ---------- App installierbar (PWA) ----------
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
 // ---------- Render & Events ----------
 function render() {
@@ -873,10 +1213,13 @@ function render() {
   const badge = $('#openBadge'); badge.textContent = open; badge.classList.toggle('hidden', !open);
   $('#accSel').innerHTML = `<option value="alle">Alle Konten</option>` + S.accounts.map(a => `<option value="${a.id}"${a.id === S.acc ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
   if (S.acc === 'alle') $('#accSel').value = 'alle';
-  const v = { import: viewImport, tx: viewTx, year: viewYear, compare: viewCompare, cats: viewCats }[S.view];
-  $('#view').innerHTML = v();
+  document.querySelectorAll('[data-view="import"]').forEach(b => b.classList.toggle('active', S.view === 'import'));
+  const v = { home: viewHome, import: viewImport, tx: viewTx, year: viewYear, compare: viewCompare, fix: viewFix, cats: viewCats }[S.view] || viewHome;
+  $('#view').innerHTML = backBar() + v();
+  $('#tagList').innerHTML = allTags().map(g => `<option value="${esc(g)}">`).join('');
   if (S.view === 'compare') drawCompareChart();
   if (S.view === 'import') bindImport();
+  renderBulk();
 }
 
 function bindImport() {
@@ -894,7 +1237,7 @@ function bindImport() {
       }
       render();
       $('#importResult').innerHTML = msg + `<p><button class="btn" id="goOpen">Offene Buchungen zuordnen</button></p>`;
-      $('#goOpen').onclick = () => { S.view = 'tx'; S.f = { year: 'alle', month: 'alle', cat: 'offen', q: '' }; render(); };
+      $('#goOpen').onclick = () => go('tx', { f: { cat: 'offen' }, from: 'Zurück zum Import' });
     } catch (e) { $('#importResult').innerHTML = `<p class="neg">${esc(e.message)}</p>`; }
   };
   input.onchange = () => run([...input.files]);
@@ -925,18 +1268,24 @@ document.addEventListener('change', guard(async e => {
   if (t.id === 'edAcc') { const cur = $('#edSub').value; $('#edSub').innerHTML = subOptions(cur, false, t.value); $('#edSub').value = cur; return; }
   if (t.id === 'ruAcc') { const cur = $('#ruSub').value; $('#ruSub').innerHTML = subOptions(cur, false, t.value || null).replace('<option value="">– offen –</option>', '<option value="">– Kategorie wählen –</option>'); $('#ruSub').value = cur; return; }
   if (t.dataset.payee) return setPayee(t.dataset.payee, t.value);
-  if (t.id === 'fYear') { S.f.year = t.value; return render(); }
-  if (t.id === 'fMonth') { S.f.month = t.value; return render(); }
-  if (t.id === 'fCat') { S.f.cat = t.value; S.f.sub = ''; return render(); }
+  if (t.id === 'fYear') { S.f.year = t.value; S.sel.clear(); return render(); }
+  if (t.id === 'fMonth') { S.f.month = t.value; S.sel.clear(); return render(); }
+  if (t.id === 'fCat') { S.f.cat = t.value; S.f.sub = ''; S.sel.clear(); return render(); }
   if (t.id === 'fSub') { S.f.sub = t.value; return render(); }
+  if (t.id === 'fTag') { S.f.tag = t.value; S.sel.clear(); return render(); }
+  if (t.dataset.selid) { t.checked ? S.sel.add(t.dataset.selid) : S.sel.delete(t.dataset.selid); return renderBulk(); }
+  if (t.id === 'selAll') { document.querySelectorAll('[data-selid]').forEach(cb => { cb.checked = t.checked; t.checked ? S.sel.add(cb.dataset.selid) : S.sel.delete(cb.dataset.selid); }); return renderBulk(); }
+  if (t.dataset.budget) return saveBudget(t.dataset.budget, t.value);
+  if (t.id === 'fxEnded') { S.showEnded = t.checked; return render(); }
   if (t.id === 'ySel') { S.yearSel = +t.value; return render(); }
   if (t.id === 'cmpYtd') { S.cmpYtd = t.checked; return render(); }
-  if (t.id === 'accSel') { S.acc = t.value; try { localStorage.setItem('fin_acc', S.acc); } catch {} return render(); }
+  if (t.id === 'accSel') { S.acc = t.value; S.sel.clear(); try { localStorage.setItem('fin_acc', S.acc); } catch {} return render(); }
   if (t.id === 'impAcc') { S.importAcc = t.value; return; }
 }));
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.dataset.payee) e.target.blur();
+  if (e.key === 'Enter' && (e.target.dataset.payee || e.target.dataset.budget)) e.target.blur();
+  if (e.key === 'Enter' && e.target.id === 'bulkTag') { e.preventDefault(); bulkTag().catch(fail); }
 });
 
 let qTimer;
@@ -950,17 +1299,32 @@ document.addEventListener('click', guard(async e => {
   const dr = e.target.closest('td[data-drill]');
   if (dr) {
     const [key, m] = dr.dataset.drill.split('|');
-    S.view = 'tx'; S.f = { year: String(S.yearSel), month: m === '0' ? 'alle' : m, cat: key, q: '' };
-    return render();
+    return go('tx', { f: { year: String(S.yearSel), month: m === '0' ? 'alle' : m, cat: key }, from: fromLabel() });
   }
   const b = e.target.closest('button, tr[data-exp]'); if (!b) return;
   const d = b.dataset;
-  if (d.view) { S.view = d.view; return render(); }
+  if ('back' in d) return history.back();
+  if (d.trend) { e.stopPropagation(); return openTrend(d.trend); }
+  if (d.view) return go(d.view);
+  if (d.jump) return document.getElementById(d.jump)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (d.hm) { S.homeMonth = ymAdd(S.homeMonth, +d.hm); try { history.replaceState(snapshot(), '', '#home'); } catch {} return render(); }
+  if (d.gotx) return go('tx', { f: { cat: d.gotx }, from: fromLabel() });
+  if (d.hometx) return go('tx', { f: { cat: d.hometx, year: S.homeMonth.slice(0, 4), month: String(+S.homeMonth.slice(5)) }, from: fromLabel() });
+  if (d.tagf) return go('tx', { f: { tag: d.tagf }, from: fromLabel() });
+  if (d.fixtx) { const x = detectRecurring().find(x => x.id === d.fixtx); return x && go('tx', { f: { ids: x.ids, idsLabel: `Fixkosten: ${x.payee}` }, from: fromLabel() }); }
+  if ('clearids' in d) { S.f.ids = null; S.f.idsLabel = ''; return render(); }
+  if (b.id === 'csvFiltered') return exportCsv(filteredTxs(), `buchungen-${stamp()}.csv`);
+  if (b.id === 'csvAll') return exportCsv(S.txs, `buchungen-alle-${stamp()}.csv`);
+  if (b.id === 'backupJson') return exportBackup();
+  if (b.id === 'bulkAssign') return bulkAssign();
+  if (b.id === 'bulkTagAdd') return bulkTag();
+  if (b.id === 'bulkDel') return bulkDelete();
+  if (b.id === 'bulkClear') { S.sel.clear(); return render(); }
   if (d.exp) { S.expanded.has(d.exp) ? S.expanded.delete(d.exp) : S.expanded.add(d.exp); return render(); }
   if (d.ok) { const t = S.txs.find(x => x.id === d.ok); return setCategory(t.id, t.subcategory_id); }
   if (d.del) return deleteTx(d.del);
   if (d.edit) return openEditDialog(d.edit);
-  if (d.showtx) { S.view = 'tx'; S.f = { year: 'alle', month: 'alle', cat: d.showtx, q: '' }; return render(); }
+  if (d.showtx) return go('tx', { f: { cat: d.showtx }, from: fromLabel() });
   if (d.dupimp) return resolveDups([+d.dupimp], true);
   if (d.dupskip) return resolveDups([+d.dupskip], false);
   if (d.dupall) return resolveDups(S.dupReview.map((_, i) => i), d.dupall === 'imp');
@@ -1051,7 +1415,9 @@ async function start() {
   $('#view').innerHTML = '<p class="muted">Lade…</p>';
   try { S.acc = localStorage.getItem('fin_acc') || 'alle'; } catch {}
   try { await loadAll(); } catch (e) { return fail(e); }
-  S.view = S.txs.length ? 'tx' : 'import';
+  const h = location.hash.slice(1);
+  S.view = ['home', 'tx', 'year', 'compare', 'fix', 'cats', 'import'].includes(h) ? h : S.txs.length ? 'home' : 'import';
+  try { history.replaceState(snapshot(), '', '#' + S.view); } catch {}
   render();
 }
 

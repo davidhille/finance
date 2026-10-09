@@ -20,15 +20,19 @@ In `public/config.js` URL und Anon-Key eintragen. Der Anon-Key ist öffentlich g
 Supabase-Zugangsdaten stehen in `public/config.js`.
 
 ## Bedienung
-- **Konten**: Auswahl oben rechts (Alle / Gemeinschaft / Privat) filtert alle Ansichten. Konten verwalten unter „Kategorien & Regeln". Kategorien und Regeln gelten für alle Konten.
-- **Import**: Konto wählen, dann DKB-CSV (Umsätze → Export CSV) hochladen. Doppelte Buchungen werden erkannt, vorgemerkte übersprungen.
-  - Gibt es dieselben Buchungen schon in einem anderen Konto, fragt die App nach (Schutz vor falschem Konto).
-  - Gleiches Datum + Betrag wie eine vorhandene Buchung, aber anderer Text → „Mögliche Duplikate" zur Prüfung (Importieren/Verwerfen).
-- **Buchungen**: Empfänger direkt im Feld umbenennen, Kategorie per Auswahl setzen.
-  - Jede Zuordnung erzeugt eine Regel; gleiche Händler werden sofort mit zugeordnet.
-  - *auto* = über Regel zugeordnet, *Vorschlag* = ähnlicher Händler, mit ✓ bestätigen.
-  - Umbenennen gilt für alle Buchungen dieses Händlers mit demselben alten Namen.
-- **Jahr**: Monats- und Jahressummen je Kategorie, Klick auf Kategorie zeigt Unterkategorien.
-- **Jahresvergleich**: Kategorien über alle Jahre, Δ zum Vorjahr.
-- **Eigene Regeln** (Kategorien & Regeln → „+ Regel“ oder im Bearbeiten-Dialog „Regel daraus…“): „Wenn Empfänger/Zweck enthält X → Kategorie“, optional nur Ausgaben/Einnahmen, nur ein Konto, neuer Anzeigename. Vorrang vor gelernten Regeln. Empfänger und Verwendungszweck einzeln oder kombiniert (UND). Benötigt `migrations/003_eigene_regeln.sql` und `004_regel_zweck.sql`.
-- **Kategorien & Regeln**: Kategorien/Unterkategorien verwalten, gelernte Regeln einsehen/löschen.
+- **Übersicht** (Start): Monat wählen (◀ ▶), Einnahmen/Ausgaben/Ergebnis mit Vormonat, Ausgaben je Kategorie mit Budget-Balken, Fixkosten-Kurzinfo, Tags, letzte Buchungen.
+- **Import** (Knopf oben rechts): Konto wählen, DKB-CSV hochladen. Duplikate werden erkannt, falsches Konto wird gemeldet, unklare Fälle landen in „Mögliche Duplikate".
+- **Buchungen**: Filter nach Jahr, Monat, Kategorie, Unterkategorie, Tag, Text oder Betrag (`36,73`, `>100`, `50-100`).
+  - Empfänger direkt umbenennen, Kategorie per Auswahl (inkl. „＋ Neu anlegen…").
+  - ✎ = Bearbeiten: Datum, Betrag, Konto, Kategorie, **Tags**, **Notiz**, „Regel daraus…".
+  - **Mehrfachauswahl**: Kästchen anhaken → Leiste unten: Kategorie zuordnen, Tag setzen, löschen.
+  - **⬇ CSV** exportiert die aktuell gefilterte Liste (Excel-tauglich).
+- **Jahr**: Kennzahlen mit Vorjahresvergleich (gleicher Zeitraum), Monatstabelle; Betrag anklicken = Buchungen, 📈 = Verlauf.
+- **Vergleich**: Jahresergebnis und Kategorien über alle Jahre, optional nur Jan–aktueller Monat.
+- **Fixkosten**: automatisch erkannte wiederkehrende Ausgaben/Einnahmen/Umbuchungen mit Monats- und Jahressumme, „beendet?"-Hinweis.
+- **Einstellungen**: Konten, Kategorien (Budget pro Monat, Sichtbarkeit je Konto, Sortierung, 📈 Verlauf), eigene und gelernte Regeln, **Daten & Backup** (CSV aller Buchungen, JSON-Komplettbackup).
+- **Zurück**: Browser-Zurück funktioniert überall; nach einem Klick aus Übersicht/Jahr/Fixkosten führt „← Zurück zu …" direkt zurück.
+- **Als App**: Im Browser „Zum Startbildschirm hinzufügen" (iPhone: Teilen-Menü; Android/Chrome: Menü → App installieren).
+
+## Datenbank-Migrationen
+Neue Funktionen bringen ggf. eine Datei in `migrations/` mit – einmal im Supabase SQL Editor ausführen (001 = `schema.sql`, dann 002–007 der Reihe nach). `schema.sql` enthält immer den Gesamtstand für Neuinstallationen.

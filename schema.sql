@@ -120,3 +120,8 @@ alter table categories add column if not exists account_id uuid references accou
 
 -- Unterkategorie optional nur für ein Konto (leer = alle)
 alter table subcategories add column if not exists account_id uuid references accounts on delete set null;
+
+-- Notizen, Tags, Budget
+alter table transactions add column if not exists note text;
+alter table transactions add column if not exists tags text[] not null default '{}';
+alter table categories add column if not exists budget numeric(12,2);
