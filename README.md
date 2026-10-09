@@ -8,16 +8,16 @@
 5. **Project Settings → API**: `Project URL` und `anon public` Key kopieren.
 
 ## 2. App konfigurieren
-In `config.js` URL und Anon-Key eintragen. Der Anon-Key ist öffentlich gedacht; geschützt wird über Login + Row Level Security.
+In `public/config.js` URL und Anon-Key eintragen. Der Anon-Key ist öffentlich gedacht; geschützt wird über Login + Row Level Security.
 
-## 3. Cloudflare Pages (keine eigene Domain nötig)
-1. dash.cloudflare.com → *Workers & Pages* → *Create* → Reiter *Pages* → *Connect to Git*.
-2. GitHub verbinden, Repo `davidhille/finance` freigeben und auswählen (Repo darf privat bleiben).
-3. Framework preset *None*, Build command leer, Build output directory `/` → *Save and Deploy*.
-4. Die App läuft unter `https://<projektname>.pages.dev`. Ab dann: `git push` auf `main` = Deploy.
-5. Supabase → *Authentication* → *URL Configuration*: diese Adresse als *Site URL* eintragen.
+## 3. Cloudflare (Worker mit statischen Dateien, keine eigene Domain nötig)
+1. dash.cloudflare.com → *Workers & Pages* → *Create* → Repo `davidhille/finance` wählen (darf privat bleiben).
+2. Build command leer, Deploy command `npx wrangler deploy` → *Deploy*.
+   Die Konfiguration steht in `wrangler.jsonc`, ausgeliefert wird nur der Ordner `public/`.
+3. Die App läuft unter `https://finance.<dein-account>.workers.dev`. Ab dann: `git push` auf `main` = Deploy.
+4. Supabase → *Authentication* → *URL Configuration*: diese Adresse als *Site URL* eintragen.
 
-Eine eigene Domain kann später unter *Custom domains* ergänzt werden.
+Supabase-Zugangsdaten stehen in `public/config.js`.
 
 ## Bedienung
 - **Import**: DKB-CSV (Umsätze → Export CSV) hochladen. Doppelte Buchungen werden erkannt, vorgemerkte übersprungen.
