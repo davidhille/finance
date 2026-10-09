@@ -70,3 +70,9 @@ begin
                     using (user_id = auth.uid()) with check (user_id = auth.uid())', t);
   end loop;
 end $$;
+
+-- Zugriffsrechte (nötig, wenn "Automatically expose new tables" aus ist):
+-- nur eingeloggte Nutzer, anonym kein Zugriff
+revoke all on categories, subcategories, transactions, rules from anon;
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on categories, subcategories, transactions, rules to authenticated;
