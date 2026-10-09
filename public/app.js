@@ -25,6 +25,7 @@ const DEFAULTS = [
 ];
 
 // ---------- Helfer ----------
+const IC_TREND = '<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 13h12M3 10l3.5-3.5 2.5 2.5L13 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const eur = n => (n || 0).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
@@ -480,8 +481,8 @@ function viewYear() {
       if (!total(cs.map(Math.abs))) continue;
       sec = add(sec, cs);
       const open = S.expanded.has(c.id);
-      rowsHtml += line('cat clickable', `${open ? '▾' : '▸'} ${esc(c.name)} <button class="icon trend" data-trend="cat:${c.id}" title="Verlauf">📈</button>`, cs, `data-exp="${c.id}"`, c.id);
-      if (open) subs.forEach(s => { if (agg.has(s.id)) rowsHtml += line('sub', `${esc(s.name)} <button class="icon trend" data-trend="sub:${s.id}" title="Verlauf">📈</button>`, agg.get(s.id), '', 'sub:' + s.id); });
+      rowsHtml += line('cat clickable', `${open ? '▾' : '▸'} ${esc(c.name)} <button class="icon trend" data-trend="cat:${c.id}" title="Verlauf" aria-label="Verlauf">${IC_TREND}</button>`, cs, `data-exp="${c.id}"`, c.id);
+      if (open) subs.forEach(s => { if (agg.has(s.id)) rowsHtml += line('sub', `${esc(s.name)} <button class="icon trend" data-trend="sub:${s.id}" title="Verlauf" aria-label="Verlauf">${IC_TREND}</button>`, agg.get(s.id), '', 'sub:' + s.id); });
     }
     const none = kind === 'umbuchung' ? null : agg.get(flip < 0 ? 'none-' : 'none+');
     if (none) { sec = add(sec, none); rowsHtml += line('cat', '<span class="state offen">nicht zugeordnet</span>', none, '', 'offen'); }
@@ -496,7 +497,7 @@ function viewYear() {
     <div class="filters"><h2 style="margin:0">Übersicht</h2>
       <select id="ySel">${ys.map(v => `<option${v === year ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
     ${resultTiles(year)}
-    <p class="muted" style="margin:16px 0 8px">Ausgaben positiv · Umbuchungen mit Vorzeichen · Kategorie anklicken = Unterkategorien · Betrag anklicken = Buchungen · 📈 = Verlauf</p>
+    <p class="muted" style="margin:16px 0 8px">Ausgaben positiv · Umbuchungen mit Vorzeichen · Kategorie anklicken = Unterkategorien · Betrag anklicken = Buchungen · Linien-Symbol = Verlauf</p>
     <div class="tablewrap"><table class="ytable">
       <thead><tr><th></th>${MONTHS.map(m => `<th class="num">${m}</th>`).join('')}<th class="num">Jahr</th><th class="num">Ø Monat</th></tr></thead>
       <tbody>${inc.html}${exp.html}${umb.html}
@@ -573,16 +574,16 @@ function viewCats() {
   const scopeSel = c => `<select class="scope" data-scope="${c.id}" title="Für welche Konten?"><option value="">alle Konten</option>${S.accounts.map(a => `<option value="${a.id}"${c.account_id === a.id ? ' selected' : ''}>nur ${esc(a.name)}</option>`).join('')}</select>`;
   const KIND = { ausgabe: 'Ausgabe', einnahme: 'Einnahme', umbuchung: 'Umbuchung' };
   const tag = x => x.account_id ? `<span class="tag" title="${esc(scopeTxt(x))}">${esc(accById(x.account_id)?.name || '?')}</span>` : '';
-  const cards = shown.map(c => `<div class="card catcard">
+  const cards = shown.map((c, i) => `<div class="card catcard" data-i="${i}">
       <div class="cathead">
         <h2 class="name" title="${esc(c.name)}">${esc(c.name)}</h2>${badge(catCnt(c), c.id)}
-        <span class="acts"><button class="icon" data-trend="cat:${c.id}" title="Verlauf">📈</button><button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button></span>
+        <span class="acts"><button class="icon" data-trend="cat:${c.id}" title="Verlauf" aria-label="Verlauf">${IC_TREND}</button><button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button></span>
       </div>
       <div class="catmeta"><span class="kind" style="margin:0">${KIND[c.kind] || c.kind}</span>${scopeSel(c)}<span class="move"><button class="icon" data-catmove="${c.id}|-1" title="Nach vorne"${S.cats[0] === c ? ' disabled' : ''}>◀</button><button class="icon" data-catmove="${c.id}|1" title="Nach hinten"${S.cats[S.cats.length - 1] === c ? ' disabled' : ''}>▶</button></span></div>
       ${c.kind === 'ausgabe' ? `<label class="catmeta muted" style="font-size:12px">Budget pro Monat <input class="budget" data-budget="${c.id}" inputmode="decimal" placeholder="kein" value="${c.budget != null ? String(c.budget).replace('.', ',') : ''}"> €</label>` : ''}
       <div class="sublist">${S.subs.filter(s => s.category_id === c.id).map(s => `<div class="subrow${catVisible(s, S.acc) ? '' : ' dim'}">
         <span class="n" title="${esc(s.name)}">${esc(s.name)}${tag(s)}</span>${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}
-        <button class="icon" data-trend="sub:${s.id}" title="Verlauf">📈</button><button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}" title="Löschen">×</button></div>`).join('')}</div>
+        <button class="icon" data-trend="sub:${s.id}" title="Verlauf" aria-label="Verlauf">${IC_TREND}</button><button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}" title="Löschen">×</button></div>`).join('')}</div>
       <button class="ghost addsub" data-addsub="${c.id}">+ Unterkategorie</button></div>`).join('');
   const rules = [...S.rules.values()].filter(r => r.subcategory_id).sort((a, b) => a.match_key.localeCompare(b.match_key));
   const anchors = `<div class="filters" style="margin-bottom:12px">${[['s-konten', 'Konten'], ['s-kat', 'Kategorien'], ['s-regeln', 'Regeln'], ['s-daten', 'Daten & Backup']].map(([id, l]) => `<button class="ghost" data-jump="${id}">${l}</button>`).join('')}</div>`;
@@ -660,6 +661,20 @@ async function submitNewDialog() {
 $('#newForm').addEventListener('submit', e => { e.preventDefault(); submitNewDialog().catch(fail); });
 $('#ndCancel').onclick = closeNewDialog;
 $('#newDlg').addEventListener('cancel', e => { e.preventDefault(); closeNewDialog(); });
+
+// Karten lückenlos in Spalten verteilen; Reihenfolge bleibt zeilenweise (links → rechts)
+function masonry() {
+  const grid = document.querySelector('.catgrid'); if (!grid) return;
+  const cards = [...grid.querySelectorAll(':scope > .catcard, :scope > .catcol > .catcard')].sort((a, b) => a.dataset.i - b.dataset.i);
+  const cols = Math.max(1, Math.floor((grid.clientWidth + 16) / 336));
+  const colEls = Array.from({ length: cols }, () => Object.assign(document.createElement('div'), { className: 'catcol' }));
+  // jede Karte in die aktuell kürzeste Spalte (bei Gleichstand die linke)
+  const h = Array(cols).fill(0);
+  grid.replaceChildren(...colEls);
+  cards.forEach(c => { const i = h.indexOf(Math.min(...h)); colEls[i].appendChild(c); h[i] += c.offsetHeight + 16; });
+}
+let mTimer;
+window.addEventListener('resize', () => { clearTimeout(mTimer); mTimer = setTimeout(() => S.view === 'cats' && masonry(), 150); });
 
 // ---------- Reihenfolge der Kategorien ----------
 async function saveCatOrder() {
@@ -983,7 +998,7 @@ function barRow({ label, value, budget, max, click, trend, sub }) {
   const ratio = budget ? value / budget : (max ? value / max : 0);
   const cls = budget ? (ratio > 1 ? 'over' : ratio > 0.8 ? 'warn' : '') : '';
   const fill = Math.min(100, Math.max(0, ratio * 100));
-  return `<div class="bar"><div class="bl"><span><button class="linkbtn" ${click}>${label}</button>${trend ? ` <button class="icon trend" data-trend="${trend}" title="Verlauf">📈</button>` : ''}</span>
+  return `<div class="bar"><div class="bl"><span><button class="linkbtn" ${click}>${label}</button>${trend ? ` <button class="icon trend" data-trend="${trend}" title="Verlauf" aria-label="Verlauf">${IC_TREND}</button>` : ''}</span>
     <span class="bv">${eur(value)}${budget ? ` <span class="muted">von ${eur(budget)}</span>` : ''}</span></div>
     <div class="bt"><div class="bf ${cls}" style="width:${fill}%;${budget ? '' : 'opacity:.55'}"></div></div>${sub ? `<div class="note">${sub}</div>` : ''}</div>`;
 }
@@ -1228,6 +1243,7 @@ function render() {
   $('#view').innerHTML = backBar() + v();
   $('#tagList').innerHTML = allTags().map(g => `<option value="${esc(g)}">`).join('');
   if (S.view === 'compare') drawCompareChart();
+  if (S.view === 'cats') masonry();
   if (S.view === 'import') bindImport();
   renderBulk();
 }
