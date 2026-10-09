@@ -71,6 +71,7 @@ button.count{border:0;background:var(--accent-soft);color:var(--accent);border-r
 button.count.zero{background:var(--line);color:var(--muted);cursor:default}
 button.count:not(.zero):hover{background:var(--accent);color:#fff}
 .hidden{display:none!important}
+select.scope{font-size:12px;padding:2px 6px;color:var(--muted)}
 dialog{border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink);padding:20px;width:min(420px,calc(100vw - 32px))}
 dialog::backdrop{background:rgba(0,0,0,.35)}
 dialog label{display:block;font-size:12px;color:var(--muted);margin:12px 0 4px}
@@ -115,6 +116,7 @@ dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
     <div id="ndNewBox" class="row">
       <div style="flex:2"><label for="ndCatName">Name der neuen Kategorie</label><input id="ndCatName" placeholder="z. B. Haus &amp; Garten"></div>
       <div style="flex:1"><label for="ndKind">Typ</label><select id="ndKind"><option value="ausgabe">Ausgabe</option><option value="einnahme">Einnahme</option><option value="umbuchung">Umbuchung</option></select></div>
+      <div style="flex:1"><label for="ndScope">Sichtbar für</label><select id="ndScope"></select></div>
     </div>
     <label for="ndSub">Unterkategorie</label>
     <input id="ndSub" placeholder="z. B. Bauhaus – leer = Sonstiges">

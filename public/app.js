@@ -35,6 +35,9 @@ const catById = id => S.cats.find(c => c.id === id);
 const catOfTx = t => { const s = subById(t.subcategory_id); return s ? catById(s.category_id) : null; };
 const keyOf = t => P.keyFor(t);
 const accById = id => S.accounts.find(a => a.id === id);
+// Kategorie sichtbar für Konto? (account_id leer = alle Konten)
+const catVisible = (c, accId) => !c.account_id || !accId || accId === 'alle' || c.account_id === accId;
+const scopeTxt = c => c.account_id ? 'nur ' + (accById(c.account_id)?.name || '?') : 'alle Konten';
 // Buchungen im gewählten Konto (oder alle)
 const scoped = () => S.acc === 'alle' ? S.txs : S.txs.filter(t => t.account_id === S.acc);
 const years = () => [...new Set(scoped().map(t => +t.booking_date.slice(0, 4)))].sort((a, b) => b - a);
@@ -241,9 +244,10 @@ async function deleteTx(id) {
 }
 
 // ---------- Ansichten ----------
-function subOptions(selected, withNew = true) {
+function subOptions(selected, withNew = true, accId = null) {
   let h = `<option value="">– offen –</option>${withNew ? '<option value="__new">＋ Neu anlegen…</option>' : ''}`;
-  for (const c of S.cats) {
+  const selCat = subById(selected)?.category_id;
+  for (const c of S.cats.filter(c => catVisible(c, accId) || c.id === selCat)) {
     h += `<optgroup label="${esc(c.name)}">`;
     for (const s of S.subs.filter(s => s.category_id === c.id))
       h += `<option value="${s.id}"${s.id === selected ? ' selected' : ''}>${esc(c.name)} › ${esc(s.name)}</option>`;
@@ -319,7 +323,7 @@ function viewTx() {
       <td><input class="payee" data-payee="${t.id}" value="${esc(t.payee)}" title="Original: ${esc(t.counterparty_raw)}"></td>
       <td class="purpose" title="${esc(t.purpose)}">${esc(t.purpose)}</td>
       <td class="num ${sign(t.amount)}">${eur(t.amount)}</td>
-      <td><select data-sub="${t.id}">${subOptions(t.subcategory_id)}</select></td>
+      <td><select data-sub="${t.id}">${subOptions(t.subcategory_id, true, t.account_id)}</select></td>
       <td>${st}</td>
       <td style="white-space:nowrap"><button class="icon" data-edit="${t.id}" title="Bearbeiten">✎</button><button class="icon" data-del="${t.id}" title="Löschen">×</button></td></tr>`;
   }).join('');
@@ -331,7 +335,7 @@ function viewTx() {
       <select id="fCat">
         <option value="offen"${S.f.cat === 'offen' ? ' selected' : ''}>Offen &amp; Vorschläge</option>
         <option value="alle"${S.f.cat === 'alle' ? ' selected' : ''}>Alle Kategorien</option>
-        ${S.cats.map(c => `<option value="${c.id}"${S.f.cat === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
+        ${S.cats.filter(c => catVisible(c, S.acc) || S.f.cat === c.id).map(c => `<option value="${c.id}"${S.f.cat === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
         ${S.f.cat.startsWith('sub:') ? (s => `<option value="${S.f.cat}" selected>${esc(catById(s?.category_id)?.name)} › ${esc(s?.name)}</option>`)(subById(S.f.cat.slice(4))) : ''}
       </select>
       <input id="fQ" placeholder="Suche…" value="${esc(S.f.q)}">
@@ -453,8 +457,11 @@ function viewCats() {
   scoped().forEach(t => { if (t.subcategory_id && t.assign_state !== 'vorschlag') cnt.set(t.subcategory_id, (cnt.get(t.subcategory_id) || 0) + 1); });
   const catCnt = c => S.subs.filter(s => s.category_id === c.id).reduce((a, s) => a + (cnt.get(s.id) || 0), 0);
   const badge = (n, filter) => `<button class="count${n ? '' : ' zero'}" data-showtx="${filter}" title="Buchungen anzeigen"${n ? '' : ' disabled'}>${n}</button>`;
-  const cards = S.cats.map(c => `<div class="card"><h2>${esc(c.name)} ${badge(catCnt(c), c.id)}<span class="kind">${c.kind}</span>
+  const shown = S.cats.filter(c => catVisible(c, S.acc)), hidden = S.cats.filter(c => !catVisible(c, S.acc));
+  const scopeSel = c => `<select class="scope" data-scope="${c.id}" title="Für welche Konten?"><option value="">alle Konten</option>${S.accounts.map(a => `<option value="${a.id}"${c.account_id === a.id ? ' selected' : ''}>nur ${esc(a.name)}</option>`).join('')}</select>`;
+  const cards = shown.map(c => `<div class="card"><h2>${esc(c.name)} ${badge(catCnt(c), c.id)}<span class="kind">${c.kind}</span>
       <button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button></h2>
+      <div style="margin:-6px 0 8px">${scopeSel(c)}</div>
       ${S.subs.filter(s => s.category_id === c.id).map(s => `<span class="chip">${esc(s.name)} ${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}<button class="icon" data-rensub="${s.id}">✎</button><button class="icon" data-delsub="${s.id}">×</button></span>`).join('')}
       <div style="margin-top:8px"><button class="ghost" data-addsub="${c.id}">+ Unterkategorie</button></div></div>`).join('');
   const rules = [...S.rules.values()].filter(r => r.subcategory_id).sort((a, b) => a.match_key.localeCompare(b.match_key));
@@ -463,9 +470,11 @@ function viewCats() {
       <button class="ghost" id="addAcc">+ Konto</button></div></div>`;
   return accCard + `<div class="card"><div class="filters"><h2 style="margin:0">Kategorien</h2>
       <input id="newCat" placeholder="Neue Kategorie"><select id="newKind"><option value="ausgabe">Ausgabe</option><option value="einnahme">Einnahme</option><option value="umbuchung">Umbuchung</option></select>
+      <select id="newScope"><option value="">alle Konten</option>${S.accounts.map(a => `<option value="${a.id}"${S.acc === a.id ? ' selected' : ''}>nur ${esc(a.name)}</option>`).join('')}</select>
       <button class="btn" id="addCat">Anlegen</button></div>
       <p class="muted">„Umbuchung" (z. B. aufs Sparkonto) zählt weder als Einnahme noch als Ausgabe.</p></div>
     <div class="catgrid">${cards}</div>
+    ${hidden.length ? `<p class="muted" style="margin-top:8px">Für „${esc(accById(S.acc)?.name)}" ausgeblendet: ${hidden.map(c => `${esc(c.name)} <span class="kind">(${scopeTxt(c)})</span>`).join(', ')} – sichtbar unter „Alle Konten".</p>` : ''}
     ${viewUserRules()}
     <div class="card" style="margin-top:16px"><h2>Gelernte Regeln (${rules.length})</h2>
       <p class="muted">Entstehen automatisch, wenn du eine Buchung zuordnest. Löschen = App vergisst diese Zuordnung.</p>
@@ -483,8 +492,9 @@ function openNewDialog(txId) {
   ndTxId = txId;
   const t = S.txs.find(x => x.id === txId), cur = catOfTx(t);
   $('#ndTx').textContent = `${t.payee} · ${eur(t.amount)}`;
+  $('#ndScope').innerHTML = `<option value="">Alle Konten</option>` + (accById(t.account_id) ? `<option value="${t.account_id}">nur ${esc(accById(t.account_id).name)}</option>` : '');
   $('#ndCat').innerHTML = `<option value="__newcat">＋ Neue Kategorie…</option>` +
-    S.cats.map(c => `<option value="${c.id}"${cur?.id === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+    S.cats.filter(c => catVisible(c, t.account_id) || c.id === cur?.id).map(c => `<option value="${c.id}"${cur?.id === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
   if (!cur) $('#ndCat').value = '__newcat';
   $('#ndCatName').value = ''; $('#ndSub').value = '';
   $('#ndKind').value = t.amount < 0 ? 'ausgabe' : 'einnahme';
@@ -503,7 +513,7 @@ async function submitNewDialog() {
     const existing = S.cats.find(c => c.name.toLowerCase() === name.toLowerCase());
     if (existing) catId = existing.id;
     else {
-      const { data, error } = await sb.from('categories').insert({ name, kind: $('#ndKind').value, sort: S.cats.length }).select().single();
+      const { data, error } = await sb.from('categories').insert({ name, kind: $('#ndKind').value, sort: S.cats.length, ...($('#ndScope').value ? { account_id: $('#ndScope').value } : {}) }).select().single();
       if (error) throw error;
       S.cats.push(data); catId = data.id;
     }
@@ -560,7 +570,7 @@ function openRuleDialog(rule = null, prefill = {}) {
   $('#ruPattern').value = emp; $('#ruPurpose').value = zweck; $('#ruDir').value = r.direction;
   $('#ruAcc').innerHTML = `<option value="">Alle Konten</option>` + S.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
   $('#ruAcc').value = r.account_id || '';
-  $('#ruSub').innerHTML = subOptions(r.subcategory_id, false).replace('<option value="">– offen –</option>', '<option value="">– Kategorie wählen –</option>');
+  $('#ruSub').innerHTML = subOptions(r.subcategory_id, false, r.account_id).replace('<option value="">– offen –</option>', '<option value="">– Kategorie wählen –</option>');
   $('#ruPayee').value = r.payee || '';
   updateRulePreview();
   $('#ruleDlg').showModal(); $('#ruPattern').focus();
@@ -625,7 +635,7 @@ function openEditDialog(id) {
   $('#edAmount').value = t.amount.toFixed(2).replace('.', ',');
   $('#edPayee').value = t.payee; $('#edPurpose').value = t.purpose;
   $('#edAcc').innerHTML = S.accounts.map(a => `<option value="${a.id}"${a.id === t.account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
-  $('#edSub').innerHTML = subOptions(t.subcategory_id, false);
+  $('#edSub').innerHTML = subOptions(t.subcategory_id, false, t.account_id);
   $('#editDlg').showModal();
 }
 async function submitEditDialog() {
@@ -688,6 +698,14 @@ document.addEventListener('change', guard(async e => {
   const t = e.target;
   if (t.dataset.sub) return t.value === '__new' ? openNewDialog(t.dataset.sub) : setCategory(t.dataset.sub, t.value);
   if (t.id === 'ndCat') return toggleNewBox();
+  if (t.dataset.scope) {
+    const c = catById(t.dataset.scope), account_id = t.value || null;
+    const { error } = await sb.from('categories').update({ account_id }).eq('id', c.id);
+    if (error) throw /account_id/.test(error.message) ? new Error('Bitte migrations/005_kategorie_konto.sql in Supabase ausführen') : error;
+    c.account_id = account_id; toast(`${c.name}: ${scopeTxt(c)}`); return render();
+  }
+  if (t.id === 'edAcc') { const cur = $('#edSub').value; $('#edSub').innerHTML = subOptions(cur, false, t.value); $('#edSub').value = cur; return; }
+  if (t.id === 'ruAcc') { const cur = $('#ruSub').value; $('#ruSub').innerHTML = subOptions(cur, false, t.value || null).replace('<option value="">– offen –</option>', '<option value="">– Kategorie wählen –</option>'); $('#ruSub').value = cur; return; }
   if (t.dataset.payee) return setPayee(t.dataset.payee, t.value);
   if (t.id === 'fYear') { S.f.year = t.value; return render(); }
   if (t.id === 'fMonth') { S.f.month = t.value; return render(); }
@@ -728,7 +746,7 @@ document.addEventListener('click', guard(async e => {
   if (d.dupall) return resolveDups(S.dupReview.map((_, i) => i), d.dupall === 'imp');
   if (b.id === 'addCat') {
     const name = $('#newCat').value.trim(); if (!name) return;
-    const { data, error } = await sb.from('categories').insert({ name, kind: $('#newKind').value, sort: S.cats.length }).select().single();
+    const { data, error } = await sb.from('categories').insert({ name, kind: $('#newKind').value, sort: S.cats.length, ...($('#newScope').value ? { account_id: $('#newScope').value } : {}) }).select().single();
     if (error) throw error;
     const s = await sb.from('subcategories').insert({ category_id: data.id, name: 'Sonstiges' }).select().single();
     if (s.error) throw s.error;
@@ -751,8 +769,14 @@ document.addEventListener('click', guard(async e => {
   if (d.delcat || d.delsub) {
     const id = d.delcat || d.delsub;
     const subIds = d.delcat ? S.subs.filter(s => s.category_id === id).map(s => s.id) : [id];
-    const n = S.txs.filter(t => subIds.includes(t.subcategory_id)).length;
-    if (!confirm(`Wirklich löschen? ${n} Buchung(en) werden wieder „offen".`)) return;
+    const hit = S.txs.filter(t => subIds.includes(t.subcategory_id));
+    const per = S.accounts.map(a => [a.name, hit.filter(t => t.account_id === a.id).length]).filter(([, n]) => n);
+    const nRules = [...S.rules.values()].filter(r => subIds.includes(r.subcategory_id)).length + S.userRules.filter(r => subIds.includes(r.subcategory_id)).length;
+    const label = d.delcat ? `Kategorie „${catById(id).name}"` : `Unterkategorie „${subById(id).name}"`;
+    const msg = `${label} löschen?\n\nGilt für alle Konten.\n` +
+      (hit.length ? `${hit.length} Buchung(en) werden wieder „offen": ${per.map(([a, n]) => `${n} ${a}`).join(', ')}.\n` : 'Keine Buchungen betroffen.\n') +
+      (nRules ? `${nRules} Regel(n) werden mitgelöscht.` : '');
+    if (!confirm(msg)) return;
     const { error } = await sb.from(d.delcat ? 'categories' : 'subcategories').delete().eq('id', id);
     if (error) throw error;
     await loadAll(); return render();

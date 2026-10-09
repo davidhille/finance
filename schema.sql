@@ -114,3 +114,6 @@ grant select, insert, update, delete on user_rules to authenticated;
 
 -- Zusätzliche Bedingung Verwendungszweck (UND)
 alter table user_rules add column if not exists purpose_pattern text;
+
+-- Kategorie optional nur für ein Konto (leer = alle)
+alter table categories add column if not exists account_id uuid references accounts on delete set null;
