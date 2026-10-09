@@ -198,8 +198,8 @@ async function deleteTx(id) {
 }
 
 // ---------- Ansichten ----------
-function subOptions(selected) {
-  let h = `<option value="">– offen –</option><option value="__new">＋ Neu anlegen…</option>`;
+function subOptions(selected, withNew = true) {
+  let h = `<option value="">– offen –</option>${withNew ? '<option value="__new">＋ Neu anlegen…</option>' : ''}`;
   for (const c of S.cats) {
     h += `<optgroup label="${esc(c.name)}">`;
     for (const s of S.subs.filter(s => s.category_id === c.id))
@@ -256,7 +256,8 @@ function filteredTxs() {
     if (year !== 'alle' && t.booking_date.slice(0, 4) !== year) return false;
     if (month !== 'alle' && +t.booking_date.slice(5, 7) !== +month) return false;
     if (cat === 'offen' && t.subcategory_id && t.assign_state !== 'vorschlag') return false;
-    if (cat !== 'alle' && cat !== 'offen' && catOfTx(t)?.id !== cat) return false;
+    if (cat.startsWith('sub:')) { if (t.subcategory_id !== cat.slice(4) || t.assign_state === 'vorschlag') return false; }
+    else if (cat !== 'alle' && cat !== 'offen' && catOfTx(t)?.id !== cat) return false;
     if (ql && !(t.payee + ' ' + t.purpose + ' ' + t.counterparty_raw).toLowerCase().includes(ql)) return false;
     return true;
   });
@@ -277,7 +278,7 @@ function viewTx() {
       <td class="num ${sign(t.amount)}">${eur(t.amount)}</td>
       <td><select data-sub="${t.id}">${subOptions(t.subcategory_id)}</select></td>
       <td>${st}</td>
-      <td><button class="icon" data-del="${t.id}" title="Löschen">×</button></td></tr>`;
+      <td style="white-space:nowrap"><button class="icon" data-edit="${t.id}" title="Bearbeiten">✎</button><button class="icon" data-del="${t.id}" title="Löschen">×</button></td></tr>`;
   }).join('');
   const y = years();
   return `<div class="card">
@@ -288,6 +289,7 @@ function viewTx() {
         <option value="offen"${S.f.cat === 'offen' ? ' selected' : ''}>Offen &amp; Vorschläge</option>
         <option value="alle"${S.f.cat === 'alle' ? ' selected' : ''}>Alle Kategorien</option>
         ${S.cats.map(c => `<option value="${c.id}"${S.f.cat === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
+        ${S.f.cat.startsWith('sub:') ? (s => `<option value="${S.f.cat}" selected>${esc(catById(s?.category_id)?.name)} › ${esc(s?.name)}</option>`)(subById(S.f.cat.slice(4))) : ''}
       </select>
       <input id="fQ" placeholder="Suche…" value="${esc(S.f.q)}">
       <span class="spacer" style="flex:1"></span>
@@ -324,8 +326,9 @@ function viewYear() {
 
   const section = (title, kind, flip) => {
     let rowsHtml = '', sec = Array(12).fill(0);
-    const line = (cls, label, arr, attr = '') => `<tr class="${cls}" ${attr}><td>${label}</td>${arr.map(v => `<td class="num">${v ? eur(flip * v) : '<span class="muted">–</span>'}</td>`).join('')}
-      <td class="num"><b>${eur(flip * total(arr))}</b></td><td class="num muted">${eur(flip * total(arr) / monthsWithData)}</td></tr>`;
+    const cell = (v, key, m, extra = '') => `<td class="num${key ? ' drill' : ''} ${extra}"${key ? ` data-drill="${key}|${m}" title="Buchungen anzeigen"` : ''}>${v ? eur(flip * v) : '<span class="muted">–</span>'}</td>`;
+    const line = (cls, label, arr, attr = '', key = '') => `<tr class="${cls}" ${attr}><td>${label}</td>${arr.map((v, i) => cell(v, key, i + 1, flip === 1 && kind === 'umbuchung' ? sign(v) : '')).join('')}
+      ${cell(total(arr), key, 0, 'b')}<td class="num muted">${eur(flip * total(arr) / monthsWithData)}</td></tr>`;
     for (const c of S.cats.filter(c => c.kind === kind)) {
       const subs = S.subs.filter(s => s.category_id === c.id);
       let cs = Array(12).fill(0);
@@ -333,25 +336,26 @@ function viewYear() {
       if (!total(cs.map(Math.abs))) continue;
       sec = add(sec, cs);
       const open = S.expanded.has(c.id);
-      rowsHtml += line('cat clickable', `${open ? '▾' : '▸'} ${esc(c.name)}`, cs, `data-exp="${c.id}"`);
-      if (open) subs.forEach(s => { if (agg.has(s.id)) rowsHtml += line('sub', esc(s.name), agg.get(s.id)); });
+      rowsHtml += line('cat clickable', `${open ? '▾' : '▸'} ${esc(c.name)}`, cs, `data-exp="${c.id}"`, c.id);
+      if (open) subs.forEach(s => { if (agg.has(s.id)) rowsHtml += line('sub', esc(s.name), agg.get(s.id), '', 'sub:' + s.id); });
     }
-    const none = agg.get(flip < 0 ? 'none-' : 'none+');
-    if (none) { sec = add(sec, none); rowsHtml += line('cat', '<span class="state offen">nicht zugeordnet</span>', none); }
+    const none = kind === 'umbuchung' ? null : agg.get(flip < 0 ? 'none-' : 'none+');
+    if (none) { sec = add(sec, none); rowsHtml += line('cat', '<span class="state offen">nicht zugeordnet</span>', none, '', 'offen'); }
     if (!rowsHtml) return { html: '', sum: sec };
     return { html: `<tr><th colspan="15" style="padding-top:16px;font-size:13px;color:var(--ink)">${title}</th></tr>${rowsHtml}${line('total', 'Summe ' + title, sec)}`, sum: sec };
   };
   const inc = section('Einnahmen', 'einnahme', 1);
   const exp = section('Ausgaben', 'ausgabe', -1);
-  const saldo = add(inc.sum, exp.sum);
+  const umb = section('Umbuchungen', 'umbuchung', 1);
+  const saldo = add(add(inc.sum, exp.sum), umb.sum);
   return `<div class="card">
     <div class="filters"><h2 style="margin:0">Übersicht</h2>
       <select id="ySel">${ys.map(v => `<option${v === year ? ' selected' : ''}>${v}</option>`).join('')}</select>
-      <span class="muted">Ausgaben positiv dargestellt · Umbuchungen nicht enthalten · Kategorie anklicken für Unterkategorien</span></div>
+      <span class="muted">Ausgaben positiv · Umbuchungen mit Vorzeichen · Kategorie anklicken = Unterkategorien · Betrag anklicken = Buchungen</span></div>
     <div class="tablewrap"><table>
       <thead><tr><th></th>${MONTHS.map(m => `<th class="num">${m}</th>`).join('')}<th class="num">Jahr</th><th class="num">Ø Monat</th></tr></thead>
-      <tbody>${inc.html}${exp.html}
-      <tr class="total"><td>Saldo</td>${saldo.map(v => `<td class="num ${sign(v)}">${eur(v)}</td>`).join('')}<td class="num ${sign(total(saldo))}">${eur(total(saldo))}</td><td class="num muted">${eur(total(saldo) / monthsWithData)}</td></tr>
+      <tbody>${inc.html}${exp.html}${umb.html}
+      <tr class="total"><td>Saldo</td>${saldo.map(v => `<td class="num ${sign(v)}">${v ? eur(v) : '<span class="muted">–</span>'}</td>`).join('')}<td class="num ${sign(total(saldo))}">${eur(total(saldo))}</td><td class="num muted">${eur(total(saldo) / monthsWithData)}</td></tr>
       </tbody></table></div></div>`;
 }
 
@@ -360,11 +364,11 @@ function viewCompare() {
   if (ys.length < 1) return `<div class="card muted">Noch keine Buchungen – zuerst importieren.</div>`;
   const byYear = Object.fromEntries(ys.map(y => [y, aggregate(y)]));
   const catSum = (c, y) => S.subs.filter(s => s.category_id === c.id).reduce((a, s) => a + total(byYear[y].get(s.id) || []), 0);
-  const rows = S.cats.filter(c => c.kind !== 'umbuchung').map(c => {
+  const rows = S.cats.map(c => {
     const flip = c.kind === 'ausgabe' ? -1 : 1;
     const vals = ys.map(y => flip * catSum(c, y));
     return { c, vals };
-  }).filter(r => r.vals.some(v => v));
+  }).filter(r => r.vals.some(v => v) || scoped().some(t => t.assign_state !== 'vorschlag' && catOfTx(t)?.id === r.c.id));
   const last = ys.length - 1;
   const delta = (v) => {
     if (ys.length < 2) return '';
@@ -473,6 +477,35 @@ $('#newForm').addEventListener('submit', e => { e.preventDefault(); submitNewDia
 $('#ndCancel').onclick = closeNewDialog;
 $('#newDlg').addEventListener('cancel', e => { e.preventDefault(); closeNewDialog(); });
 
+// ---------- Buchung bearbeiten ----------
+let edId = null;
+function openEditDialog(id) {
+  const t = S.txs.find(x => x.id === id); edId = id;
+  $('#edOrig').textContent = `Original: ${t.counterparty_raw || '–'} · ${t.tx_type || ''}`;
+  $('#edDate').value = t.booking_date;
+  $('#edAmount').value = t.amount.toFixed(2).replace('.', ',');
+  $('#edPayee').value = t.payee; $('#edPurpose').value = t.purpose;
+  $('#edAcc').innerHTML = S.accounts.map(a => `<option value="${a.id}"${a.id === t.account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
+  $('#edSub').innerHTML = subOptions(t.subcategory_id, false);
+  $('#editDlg').showModal();
+}
+async function submitEditDialog() {
+  const t = S.txs.find(x => x.id === edId);
+  const amount = P.parseAmount($('#edAmount').value);
+  if (isNaN(amount)) { $('#edAmount').focus(); return toast('Betrag ungültig'); }
+  const patch = { booking_date: $('#edDate').value, amount, purpose: $('#edPurpose').value.trim(), account_id: $('#edAcc').value };
+  // Kontowechsel: Fingerabdruck mitziehen, damit ein späterer Import ins neue Konto nicht doppelt
+  if (patch.account_id !== t.account_id) patch.hash = patch.account_id + '|' + t.hash.slice(t.hash.indexOf('|') + 1);
+  const payee = $('#edPayee').value, sub = $('#edSub').value || null;
+  $('#editDlg').close(); edId = null;
+  await updateTxs([t.id], patch);
+  if (payee.trim() && payee.trim() !== t.payee) await setPayee(t.id, payee);
+  if (sub !== t.subcategory_id) await setCategory(t.id, sub);
+  else { toast('Gespeichert'); render(); }
+}
+$('#editForm').addEventListener('submit', e => { e.preventDefault(); submitEditDialog().catch(fail); });
+$('#edCancel').onclick = () => { $('#editDlg').close(); edId = null; };
+
 // ---------- Render & Events ----------
 function render() {
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
@@ -537,12 +570,19 @@ document.addEventListener('input', e => {
 });
 
 document.addEventListener('click', guard(async e => {
+  const dr = e.target.closest('td[data-drill]');
+  if (dr) {
+    const [key, m] = dr.dataset.drill.split('|');
+    S.view = 'tx'; S.f = { year: String(S.yearSel), month: m === '0' ? 'alle' : m, cat: key, q: '' };
+    return render();
+  }
   const b = e.target.closest('button, tr[data-exp]'); if (!b) return;
   const d = b.dataset;
   if (d.view) { S.view = d.view; return render(); }
   if (d.exp) { S.expanded.has(d.exp) ? S.expanded.delete(d.exp) : S.expanded.add(d.exp); return render(); }
   if (d.ok) { const t = S.txs.find(x => x.id === d.ok); return setCategory(t.id, t.subcategory_id); }
   if (d.del) return deleteTx(d.del);
+  if (d.edit) return openEditDialog(d.edit);
   if (d.dupimp) return resolveDups([+d.dupimp], true);
   if (d.dupskip) return resolveDups([+d.dupskip], false);
   if (d.dupall) return resolveDups(S.dupReview.map((_, i) => i), d.dupall === 'imp');

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Haushaltsbuch</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
   --bg:#f6f5f2;--panel:#fff;--ink:#1d1f1e;--muted:#6b706d;--line:#e4e2dc;
@@ -17,7 +17,10 @@
 }}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,system-ui,sans-serif}
-.num,td.num{font-family:"JetBrains Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.num,td.num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+td.b{font-weight:600}
+td.drill{cursor:pointer}
+td.drill:hover{background:var(--accent-soft)}
 .neg{color:var(--neg)}.pos{color:var(--pos)}
 header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5;flex-wrap:wrap}
 header h1{font-size:16px;margin:0 12px 0 0;font-weight:600}
@@ -115,6 +118,27 @@ dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
     <div class="actions">
       <button type="button" class="ghost" id="ndCancel">Abbrechen</button>
       <button type="submit" class="btn">Anlegen &amp; zuordnen</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="editDlg">
+  <form id="editForm">
+    <h2>Buchung bearbeiten</h2>
+    <p class="muted" id="edOrig" style="margin:0;font-size:12px"></p>
+    <div class="row">
+      <div style="flex:1"><label for="edDate">Datum</label><input id="edDate" type="date" required></div>
+      <div style="flex:1"><label for="edAmount">Betrag (€)</label><input id="edAmount" inputmode="decimal" required></div>
+    </div>
+    <label for="edPayee">Empfänger / Auftraggeber</label><input id="edPayee">
+    <label for="edPurpose">Verwendungszweck</label><input id="edPurpose">
+    <div class="row">
+      <div style="flex:1"><label for="edAcc">Konto</label><select id="edAcc"></select></div>
+      <div style="flex:2"><label for="edSub">Kategorie</label><select id="edSub"></select></div>
+    </div>
+    <div class="actions">
+      <button type="button" class="ghost" id="edCancel">Abbrechen</button>
+      <button type="submit" class="btn">Speichern</button>
     </div>
   </form>
 </dialog>
