@@ -127,6 +127,21 @@ dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
   </form>
 </dialog>
 
+<dialog id="subDlg">
+  <form id="subForm">
+    <h2>Unterkategorie bearbeiten</h2>
+    <p class="muted" id="sdInfo" style="margin:0;font-size:12px"></p>
+    <label for="sdName">Name</label><input id="sdName" required>
+    <label for="sdCat">Gehört zu Kategorie</label><select id="sdCat"></select>
+    <label for="sdMerge">Oder zusammenführen mit (optional)</label><select id="sdMerge"></select>
+    <p class="muted" style="font-size:12px;margin:4px 0 0">Beim Zusammenführen wandern alle Buchungen und Regeln in die gewählte Unterkategorie, diese hier wird danach gelöscht.</p>
+    <div class="actions">
+      <button type="button" class="ghost" id="sdCancel">Abbrechen</button>
+      <button type="submit" class="btn" id="sdSave">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="ruleDlg">
   <form id="ruleForm">
     <h2 id="ruTitle">Eigene Regel</h2>

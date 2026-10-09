@@ -462,7 +462,7 @@ function viewCats() {
   const cards = shown.map(c => `<div class="card"><h2>${esc(c.name)} ${badge(catCnt(c), c.id)}<span class="kind">${c.kind}</span>
       <button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button></h2>
       <div style="margin:-6px 0 8px">${scopeSel(c)}</div>
-      ${S.subs.filter(s => s.category_id === c.id).map(s => `<span class="chip">${esc(s.name)} ${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}<button class="icon" data-rensub="${s.id}">✎</button><button class="icon" data-delsub="${s.id}">×</button></span>`).join('')}
+      ${S.subs.filter(s => s.category_id === c.id).map(s => `<span class="chip">${esc(s.name)} ${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}<button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}">×</button></span>`).join('')}
       <div style="margin-top:8px"><button class="ghost" data-addsub="${c.id}">+ Unterkategorie</button></div></div>`).join('');
   const rules = [...S.rules.values()].filter(r => r.subcategory_id).sort((a, b) => a.match_key.localeCompare(b.match_key));
   const accCard = `<div class="card"><div class="filters"><h2 style="margin:0">Konten</h2>
@@ -535,6 +535,56 @@ async function submitNewDialog() {
 $('#newForm').addEventListener('submit', e => { e.preventDefault(); submitNewDialog().catch(fail); });
 $('#ndCancel').onclick = closeNewDialog;
 $('#newDlg').addEventListener('cancel', e => { e.preventDefault(); closeNewDialog(); });
+
+// ---------- Unterkategorie bearbeiten / verschieben / zusammenführen ----------
+let sdId = null;
+function openSubDialog(id) {
+  const s = subById(id); sdId = id;
+  const n = S.txs.filter(t => t.subcategory_id === id).length;
+  $('#sdInfo').textContent = `${n} Buchung(en) zugeordnet`;
+  $('#sdName').value = s.name;
+  $('#sdCat').innerHTML = S.cats.map(c => `<option value="${c.id}"${c.id === s.category_id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+  $('#sdMerge').innerHTML = '<option value="">– nicht zusammenführen –</option>' + S.cats.map(c =>
+    `<optgroup label="${esc(c.name)}">${S.subs.filter(x => x.category_id === c.id && x.id !== id).map(x => `<option value="${x.id}">${esc(c.name)} › ${esc(x.name)}</option>`).join('')}</optgroup>`).join('');
+  syncSubDialog();
+  $('#subDlg').showModal(); $('#sdName').focus();
+}
+function syncSubDialog() {
+  const merge = !!$('#sdMerge').value;
+  $('#sdName').disabled = merge; $('#sdCat').disabled = merge;
+  $('#sdSave').textContent = merge ? 'Zusammenführen' : 'Speichern';
+}
+async function submitSubDialog() {
+  const s = subById(sdId), target = $('#sdMerge').value;
+  if (target) {
+    const t = subById(target), n = S.txs.filter(x => x.subcategory_id === s.id).length;
+    if (!confirm(`„${s.name}" mit „${catById(t.category_id).name} › ${t.name}" zusammenführen?\n${n} Buchung(en) und zugehörige Regeln werden verschoben, „${s.name}" wird gelöscht.`)) return;
+    for (const tbl of ['transactions', 'user_rules']) {
+      const { error } = await sb.from(tbl).update({ subcategory_id: target }).eq('subcategory_id', s.id);
+      if (error && !(tbl === 'user_rules' && S.noUserRules)) throw error;
+    }
+    // Gelernte Regeln: umhängen
+    const r = await sb.from('rules').update({ subcategory_id: target }).eq('subcategory_id', s.id);
+    if (r.error) throw r.error;
+    const d = await sb.from('subcategories').delete().eq('id', s.id);
+    if (d.error) throw d.error;
+    $('#subDlg').close(); sdId = null;
+    await loadAll(); toast(`Zusammengeführt – ${n} Buchung(en) verschoben`); return render();
+  }
+  const name = $('#sdName').value.trim(), category_id = $('#sdCat').value;
+  if (!name) return $('#sdName').focus();
+  if (S.subs.some(x => x.id !== s.id && x.category_id === category_id && x.name.toLowerCase() === name.toLowerCase()))
+    return toast(`„${name}" gibt es dort schon – zum Zusammenführen unten auswählen`);
+  const { error } = await sb.from('subcategories').update({ name, category_id }).eq('id', s.id);
+  if (error) throw error;
+  const moved = category_id !== s.category_id;
+  Object.assign(s, { name, category_id });
+  $('#subDlg').close(); sdId = null;
+  toast(moved ? `Verschoben nach ${catById(category_id).name}` : 'Gespeichert'); render();
+}
+$('#subForm').addEventListener('submit', e => { e.preventDefault(); submitSubDialog().catch(fail); });
+$('#sdCancel').onclick = () => { $('#subDlg').close(); sdId = null; };
+$('#sdMerge').addEventListener('change', syncSubDialog);
 
 // ---------- Eigene Regeln ----------
 const FIELD_TXT = { alle: 'Empfänger oder Zweck', empfaenger: 'Empfänger', zweck: 'Verwendungszweck' };
@@ -758,6 +808,7 @@ document.addEventListener('click', guard(async e => {
     if (error) throw error;
     S.subs.push(data); return render();
   }
+  if (d.rensub) return openSubDialog(d.rensub);
   if (d.rencat || d.rensub) {
     const tbl = d.rencat ? 'categories' : 'subcategories', id = d.rencat || d.rensub;
     const obj = (d.rencat ? S.cats : S.subs).find(x => x.id === id);
