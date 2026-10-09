@@ -199,7 +199,7 @@ async function deleteTx(id) {
 
 // ---------- Ansichten ----------
 function subOptions(selected) {
-  let h = `<option value="">– offen –</option>`;
+  let h = `<option value="">– offen –</option><option value="__new">＋ Neu anlegen…</option>`;
   for (const c of S.cats) {
     h += `<optgroup label="${esc(c.name)}">`;
     for (const s of S.subs.filter(s => s.category_id === c.id))
@@ -423,6 +423,56 @@ function viewCats() {
     </div>`;
 }
 
+// ---------- Neu anlegen aus der Buchungsliste ----------
+let ndTxId = null;
+function toggleNewBox() { $('#ndNewBox').classList.toggle('hidden', $('#ndCat').value !== '__newcat'); }
+function openNewDialog(txId) {
+  ndTxId = txId;
+  const t = S.txs.find(x => x.id === txId), cur = catOfTx(t);
+  $('#ndTx').textContent = `${t.payee} · ${eur(t.amount)}`;
+  $('#ndCat').innerHTML = `<option value="__newcat">＋ Neue Kategorie…</option>` +
+    S.cats.map(c => `<option value="${c.id}"${cur?.id === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+  if (!cur) $('#ndCat').value = '__newcat';
+  $('#ndCatName').value = ''; $('#ndSub').value = '';
+  $('#ndKind').value = t.amount < 0 ? 'ausgabe' : 'einnahme';
+  toggleNewBox();
+  $('#newDlg').showModal();
+  ($('#ndCat').value === '__newcat' ? $('#ndCatName') : $('#ndSub')).focus();
+}
+function closeNewDialog() { $('#newDlg').close(); ndTxId = null; render(); }
+
+async function submitNewDialog() {
+  let catId = $('#ndCat').value;
+  const subName = $('#ndSub').value.trim() || 'Sonstiges';
+  if (catId === '__newcat') {
+    const name = $('#ndCatName').value.trim();
+    if (!name) { $('#ndCatName').focus(); return; }
+    const existing = S.cats.find(c => c.name.toLowerCase() === name.toLowerCase());
+    if (existing) catId = existing.id;
+    else {
+      const { data, error } = await sb.from('categories').insert({ name, kind: $('#ndKind').value, sort: S.cats.length }).select().single();
+      if (error) throw error;
+      S.cats.push(data); catId = data.id;
+    }
+  }
+  const want = [subName, 'Sonstiges'].filter((n, i, a) => a.indexOf(n) === i);
+  for (const n of want) {
+    if (S.subs.some(s => s.category_id === catId && s.name.toLowerCase() === n.toLowerCase())) continue;
+    const { data, error } = await sb.from('subcategories').insert({ category_id: catId, name: n }).select().single();
+    if (error) throw error;
+    S.subs.push(data);
+  }
+  S.subs.sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  const sub = S.subs.find(s => s.category_id === catId && s.name.toLowerCase() === subName.toLowerCase());
+  const txId = ndTxId;
+  $('#newDlg').close(); ndTxId = null;
+  await setCategory(txId, sub.id);
+}
+
+$('#newForm').addEventListener('submit', e => { e.preventDefault(); submitNewDialog().catch(fail); });
+$('#ndCancel').onclick = closeNewDialog;
+$('#newDlg').addEventListener('cancel', e => { e.preventDefault(); closeNewDialog(); });
+
 // ---------- Render & Events ----------
 function render() {
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
@@ -464,7 +514,8 @@ const guard = fn => (...a) => Promise.resolve(fn(...a)).catch(fail);
 
 document.addEventListener('change', guard(async e => {
   const t = e.target;
-  if (t.dataset.sub) return setCategory(t.dataset.sub, t.value);
+  if (t.dataset.sub) return t.value === '__new' ? openNewDialog(t.dataset.sub) : setCategory(t.dataset.sub, t.value);
+  if (t.id === 'ndCat') return toggleNewBox();
   if (t.dataset.payee) return setPayee(t.dataset.payee, t.value);
   if (t.id === 'fYear') { S.f.year = t.value; return render(); }
   if (t.id === 'fMonth') { S.f.month = t.value; return render(); }
