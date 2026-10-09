@@ -14,7 +14,7 @@ In `public/config.js` URL und Anon-Key eintragen. Der Anon-Key ist öffentlich g
 1. dash.cloudflare.com → *Workers & Pages* → *Create* → Repo `davidhille/finance` wählen (darf privat bleiben).
 2. Build command leer, Deploy command `npx wrangler deploy` → *Deploy*.
    Die Konfiguration steht in `wrangler.jsonc`, ausgeliefert wird nur der Ordner `public/`.
-3. Die App läuft unter `https://finance.<dein-account>.workers.dev`. Ab dann: `git push` auf `main` = Deploy.
+3. Die App läuft unter `https://finance.davidshille.workers.dev`. Ab dann: `git push` auf `main` = Deploy.
 4. Supabase → *Authentication* → *URL Configuration*: diese Adresse als *Site URL* eintragen.
 
 Supabase-Zugangsdaten stehen in `public/config.js`.
