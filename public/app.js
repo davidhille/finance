@@ -3,7 +3,7 @@ const P = window.FinParser;
 const cfg = window.FIN_CONFIG;
 const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
-const S = { accounts: [], acc: 'alle', cats: [], subs: [], txs: [], rules: new Map(), view: 'tx',
+const S = { dupReview: [], accounts: [], acc: 'alle', cats: [], subs: [], txs: [], rules: new Map(), view: 'tx',
   f: { year: 'alle', month: 'alle', cat: 'offen', q: '' }, yearSel: null, expanded: new Set() };
 
 const MONTHS = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
@@ -120,25 +120,46 @@ async function importFile(file, accountId) {
   if (!accountId) throw new Error('Bitte zuerst ein Konto wählen.');
   const text = P.decode(await file.arrayBuffer());
   const { rows, skippedPending } = P.parseDKB(text);
+  // 1) Falsches Konto? Gleiche Buchungen schon in einem anderen Konto
+  const baseOf = h => h.slice(h.indexOf('|') + 1);
+  const elsewhere = new Map(S.txs.filter(t => t.account_id !== accountId).map(t => [baseOf(t.hash), t.account_id]));
+  const hitAcc = {};
+  rows.forEach(r => { const a = elsewhere.get(r.hash); if (a) hitAcc[a] = (hitAcc[a] || 0) + 1; });
+  const hitTotal = Object.values(hitAcc).reduce((x, y) => x + y, 0);
+  if (hitTotal) {
+    const where = Object.entries(hitAcc).map(([a, n]) => `${n} im Konto „${accById(a)?.name}"`).join(', ');
+    if (!confirm(`${file.name}: ${hitTotal} von ${rows.length} Buchungen gibt es schon (${where}).\n\nIst das das richtige Konto „${accById(accountId)?.name}"?\nOK = trotzdem importieren, Abbrechen = nichts importieren.`))
+      return { aborted: true };
+  }
   rows.forEach(r => { r.account_id = accountId; r.hash = accountId + '|' + r.hash; });
   const known = new Set(S.txs.map(t => t.hash));
-  const fresh = rows.filter(r => !known.has(r.hash));
+  let fresh = rows.filter(r => !known.has(r.hash));
+  // 2) Mögliche Duplikate: gleiches Konto, Datum, Betrag – aber anderer Text
+  const fileHashes = new Set(rows.map(r => r.hash));
+  const pool = S.txs.filter(t => t.account_id === accountId && !fileHashes.has(t.hash));
+  const used = new Set(), dups = [];
+  fresh = fresh.filter(r => {
+    const ex = pool.find(t => !used.has(t.id) && t.booking_date === r.booking_date && t.amount === r.amount);
+    if (!ex) return true;
+    used.add(ex.id); dups.push({ row: r, existing: ex }); return false;
+  });
   let auto = 0, sugg = 0;
-  for (const r of fresh) {
+  for (const r of [...fresh, ...dups.map(d => d.row)]) {
     r.subcategory_id = null; r.assign_state = null;
     const m = findRule(keyOf(r));
     if (m && m.rule.subcategory_id) {
       r.subcategory_id = m.rule.subcategory_id; r.assign_state = m.state;
       if (m.state === 'auto' && m.rule.payee) r.payee = m.rule.payee;
-      m.state === 'auto' ? auto++ : sugg++;
     }
   }
+  fresh.forEach(r => { if (r.assign_state === 'auto') auto++; else if (r.assign_state === 'vorschlag') sugg++; });
   for (let i = 0; i < fresh.length; i += 500) {
     const { error } = await sb.from('transactions').insert(fresh.slice(i, i + 500));
     if (error) throw error;
   }
   await loadAll();
-  return { total: rows.length, fresh: fresh.length, dup: rows.length - fresh.length, auto, sugg,
+  S.dupReview.push(...dups);
+  return { total: rows.length, fresh: fresh.length, dup: rows.length - fresh.length - dups.length, check: dups.length, auto, sugg,
     open: fresh.length - auto - sugg, skippedPending };
 }
 
@@ -197,7 +218,35 @@ function viewImport() {
       <p>CSV-Datei hierher ziehen oder</p>
       <label class="btn">Datei wählen<input type="file" id="file" accept=".csv,text/csv" hidden multiple></label>
       <p class="muted">Bereits importierte Buchungen werden erkannt und übersprungen. Vorgemerkte Umsätze werden erst übernommen, wenn sie gebucht sind.</p>
-    </div><div id="importResult"></div></div>`;
+    </div><div id="importResult"></div></div>${viewDupReview()}`;
+}
+
+function viewDupReview() {
+  if (!S.dupReview.length) return '';
+  const rows = S.dupReview.map((d, i) => `<tr>
+      <td class="num muted">${fmtDate(d.row.booking_date)}</td><td class="muted">${esc(accById(d.row.account_id)?.name)}</td>
+      <td class="num ${sign(d.row.amount)}">${eur(d.row.amount)}</td>
+      <td><b>${esc(d.row.payee)}</b><div class="purpose">${esc(d.row.purpose)}</div></td>
+      <td><b>${esc(d.existing.payee)}</b><div class="purpose">${esc(d.existing.purpose)}</div></td>
+      <td style="white-space:nowrap"><button class="ghost" data-dupimp="${i}">Importieren</button> <button class="ghost" data-dupskip="${i}">Verwerfen</button></td></tr>`).join('');
+  return `<div class="card"><div class="filters"><h2 style="margin:0">Mögliche Duplikate (${S.dupReview.length})</h2>
+      <span class="spacer" style="flex:1"></span>
+      <button class="ghost" data-dupall="imp">Alle importieren</button><button class="ghost" data-dupall="skip">Alle verwerfen</button></div>
+    <p class="muted">Gleiches Konto, Datum und Betrag wie eine vorhandene Buchung, aber anderer Text. Bei echten zwei Käufen: importieren. Wenn DKB nur den Text geändert hat: verwerfen.</p>
+    <div class="tablewrap"><table><thead><tr><th>Datum</th><th>Konto</th><th class="num">Betrag</th><th>Neu aus Datei</th><th>Schon vorhanden</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div></div>`;
+}
+
+async function resolveDups(idxs, doImport) {
+  const items = idxs.map(i => S.dupReview[i]);
+  if (doImport) {
+    const { data, error } = await sb.from('transactions').insert(items.map(d => d.row)).select();
+    if (error) throw error;
+    S.txs.push(...data.map(t => ({ ...t, amount: +t.amount })));
+  }
+  S.dupReview = S.dupReview.filter(d => !items.includes(d));
+  toast(doImport ? `${items.length} importiert` : `${items.length} verworfen`);
+  render();
 }
 
 function filteredTxs() {
@@ -395,8 +444,9 @@ function bindImport() {
       let msg = '';
       for (const f of files) {
         const r = await importFile(f, $('#impAcc').value);
+        if (r.aborted) { msg += `<p class="muted">${esc(f.name)}: Import abgebrochen.</p>`; continue; }
         msg += `<div class="stats"><div><span class="muted">${esc(f.name)} → ${esc(accById($('#impAcc').value)?.name)}</span></div>
-          <div><b>${r.fresh}</b>neu</div><div><b>${r.dup}</b>schon vorhanden</div><div><b>${r.auto}</b>automatisch zugeordnet</div>
+          <div><b>${r.fresh}</b>neu</div><div><b>${r.dup}</b>schon vorhanden</div>${r.check ? `<div><b class="neg">${r.check}</b>prüfen (s. unten)</div>` : ''}<div><b>${r.auto}</b>automatisch zugeordnet</div>
           <div><b>${r.sugg}</b>Vorschläge</div><div><b>${r.open}</b>offen</div>${r.skippedPending ? `<div><b>${r.skippedPending}</b>vorgemerkt (übersprungen)</div>` : ''}</div>`;
       }
       render();
@@ -442,6 +492,9 @@ document.addEventListener('click', guard(async e => {
   if (d.exp) { S.expanded.has(d.exp) ? S.expanded.delete(d.exp) : S.expanded.add(d.exp); return render(); }
   if (d.ok) { const t = S.txs.find(x => x.id === d.ok); return setCategory(t.id, t.subcategory_id); }
   if (d.del) return deleteTx(d.del);
+  if (d.dupimp) return resolveDups([+d.dupimp], true);
+  if (d.dupskip) return resolveDups([+d.dupskip], false);
+  if (d.dupall) return resolveDups(S.dupReview.map((_, i) => i), d.dupall === 'imp');
   if (b.id === 'addCat') {
     const name = $('#newCat').value.trim(); if (!name) return;
     const { data, error } = await sb.from('categories').insert({ name, kind: $('#newKind').value, sort: S.cats.length }).select().single();

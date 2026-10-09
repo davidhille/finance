@@ -22,6 +22,8 @@ Supabase-Zugangsdaten stehen in `public/config.js`.
 ## Bedienung
 - **Konten**: Auswahl oben rechts (Alle / Gemeinschaft / Privat) filtert alle Ansichten. Konten verwalten unter „Kategorien & Regeln". Kategorien und Regeln gelten für alle Konten.
 - **Import**: Konto wählen, dann DKB-CSV (Umsätze → Export CSV) hochladen. Doppelte Buchungen werden erkannt, vorgemerkte übersprungen.
+  - Gibt es dieselben Buchungen schon in einem anderen Konto, fragt die App nach (Schutz vor falschem Konto).
+  - Gleiches Datum + Betrag wie eine vorhandene Buchung, aber anderer Text → „Mögliche Duplikate" zur Prüfung (Importieren/Verwerfen).
 - **Buchungen**: Empfänger direkt im Feld umbenennen, Kategorie per Auswahl setzen.
   - Jede Zuordnung erzeugt eine Regel; gleiche Händler werden sofort mit zugeordnet.
   - *auto* = über Regel zugeordnet, *Vorschlag* = ähnlicher Händler, mit ✓ bestätigen.
