@@ -20,7 +20,8 @@ In `public/config.js` URL und Anon-Key eintragen. Der Anon-Key ist öffentlich g
 Supabase-Zugangsdaten stehen in `public/config.js`.
 
 ## Bedienung
-- **Import**: DKB-CSV (Umsätze → Export CSV) hochladen. Doppelte Buchungen werden erkannt, vorgemerkte übersprungen.
+- **Konten**: Auswahl oben rechts (Alle / Gemeinschaft / Privat) filtert alle Ansichten. Konten verwalten unter „Kategorien & Regeln". Kategorien und Regeln gelten für alle Konten.
+- **Import**: Konto wählen, dann DKB-CSV (Umsätze → Export CSV) hochladen. Doppelte Buchungen werden erkannt, vorgemerkte übersprungen.
 - **Buchungen**: Empfänger direkt im Feld umbenennen, Kategorie per Auswahl setzen.
   - Jede Zuordnung erzeugt eine Regel; gleiche Händler werden sofort mit zugeordnet.
   - *auto* = über Regel zugeordnet, *Vorschlag* = ähnlicher Händler, mit ✓ bestätigen.

@@ -3,7 +3,7 @@ const P = window.FinParser;
 const cfg = window.FIN_CONFIG;
 const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
-const S = { cats: [], subs: [], txs: [], rules: new Map(), view: 'tx',
+const S = { accounts: [], acc: 'alle', cats: [], subs: [], txs: [], rules: new Map(), view: 'tx',
   f: { year: 'alle', month: 'alle', cat: 'offen', q: '' }, yearSel: null, expanded: new Set() };
 
 const MONTHS = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
@@ -34,17 +34,21 @@ const subById = id => S.subs.find(s => s.id === id);
 const catById = id => S.cats.find(c => c.id === id);
 const catOfTx = t => { const s = subById(t.subcategory_id); return s ? catById(s.category_id) : null; };
 const keyOf = t => P.keyFor(t);
-const years = () => [...new Set(S.txs.map(t => +t.booking_date.slice(0, 4)))].sort((a, b) => b - a);
+const accById = id => S.accounts.find(a => a.id === id);
+// Buchungen im gewählten Konto (oder alle)
+const scoped = () => S.acc === 'alle' ? S.txs : S.txs.filter(t => t.account_id === S.acc);
+const years = () => [...new Set(scoped().map(t => +t.booking_date.slice(0, 4)))].sort((a, b) => b - a);
 
 // ---------- Daten ----------
 async function loadAll() {
-  const [c, s, r] = await Promise.all([
+  const [a, c, s, r] = await Promise.all([
+    sb.from('accounts').select('*').order('sort'),
     sb.from('categories').select('*').order('sort'),
     sb.from('subcategories').select('*').order('name'),
     sb.from('rules').select('*'),
   ]);
-  for (const x of [c, s, r]) if (x.error) throw x.error;
-  S.cats = c.data; S.subs = s.data;
+  for (const x of [a, c, s, r]) if (x.error) throw x.error;
+  S.accounts = a.data; S.cats = c.data; S.subs = s.data;
   S.rules = new Map(r.data.map(x => [x.match_key, x]));
   // Buchungen seitenweise laden (Supabase liefert max. 1000 pro Abfrage)
   const all = [];
@@ -56,6 +60,12 @@ async function loadAll() {
   }
   S.txs = all.map(t => ({ ...t, amount: +t.amount }));
   if (!S.cats.length) await seedDefaults();
+  if (!S.accounts.length) {
+    const { data, error } = await sb.from('accounts').insert([{ name: 'Gemeinschaft', sort: 0 }, { name: 'Privat', sort: 1 }]).select();
+    if (error) throw error;
+    S.accounts = data.sort((x, y) => x.sort - y.sort);
+  }
+  if (S.acc !== 'alle' && !accById(S.acc)) S.acc = 'alle';
 }
 
 async function seedDefaults() {
@@ -106,9 +116,11 @@ async function updateTxs(ids, patch) {
 }
 
 // ---------- Import ----------
-async function importFile(file) {
+async function importFile(file, accountId) {
+  if (!accountId) throw new Error('Bitte zuerst ein Konto wählen.');
   const text = P.decode(await file.arrayBuffer());
   const { rows, skippedPending } = P.parseDKB(text);
+  rows.forEach(r => { r.account_id = accountId; r.hash = accountId + '|' + r.hash; });
   const known = new Set(S.txs.map(t => t.hash));
   const fresh = rows.filter(r => !known.has(r.hash));
   let auto = 0, sugg = 0;
@@ -177,7 +189,10 @@ function subOptions(selected) {
 }
 
 function viewImport() {
+  const def = S.acc !== 'alle' ? S.acc : (S.importAcc || '');
   return `<div class="card"><h2>DKB-Umsätze importieren</h2>
+    <div class="filters"><label for="impAcc">In Konto:</label>
+      <select id="impAcc"><option value="">– Konto wählen –</option>${S.accounts.map(a => `<option value="${a.id}"${a.id === def ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
     <div class="drop" id="drop">
       <p>CSV-Datei hierher ziehen oder</p>
       <label class="btn">Datei wählen<input type="file" id="file" accept=".csv,text/csv" hidden multiple></label>
@@ -188,7 +203,7 @@ function viewImport() {
 function filteredTxs() {
   const { year, month, cat, q } = S.f;
   const ql = q.toLowerCase();
-  return S.txs.filter(t => {
+  return scoped().filter(t => {
     if (year !== 'alle' && t.booking_date.slice(0, 4) !== year) return false;
     if (month !== 'alle' && +t.booking_date.slice(5, 7) !== +month) return false;
     if (cat === 'offen' && t.subcategory_id && t.assign_state !== 'vorschlag') return false;
@@ -207,6 +222,7 @@ function viewTx() {
       : t.assign_state === 'auto' ? '<span class="state auto">auto</span>' : '';
     return `<tr>
       <td class="num muted">${fmtDate(t.booking_date)}</td>
+      ${S.acc === 'alle' ? `<td class="muted">${esc(accById(t.account_id)?.name || '–')}</td>` : ''}
       <td><input class="payee" data-payee="${t.id}" value="${esc(t.payee)}" title="Original: ${esc(t.counterparty_raw)}"></td>
       <td class="purpose" title="${esc(t.purpose)}">${esc(t.purpose)}</td>
       <td class="num ${sign(t.amount)}">${eur(t.amount)}</td>
@@ -229,7 +245,7 @@ function viewTx() {
       <span class="muted">${list.length} Buchungen · Summe <b class="num ${sign(sum)}">${eur(sum)}</b></span>
     </div>
     ${list.length ? `<div class="tablewrap"><table>
-      <thead><tr><th>Datum</th><th>Empfänger / Auftraggeber</th><th>Verwendungszweck</th><th class="num">Betrag</th><th>Kategorie</th><th></th><th></th></tr></thead>
+      <thead><tr><th>Datum</th>${S.acc === 'alle' ? '<th>Konto</th>' : ''}<th>Empfänger / Auftraggeber</th><th>Verwendungszweck</th><th class="num">Betrag</th><th>Kategorie</th><th></th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>${list.length > 600 ? '<p class="muted">Die ersten 600 werden angezeigt – Filter eingrenzen.</p>' : ''}`
       : `<p class="muted">${S.f.cat === 'offen' ? 'Alles zugeordnet. 👌' : 'Keine Buchungen für diesen Filter.'}</p>`}
   </div>`;
@@ -238,7 +254,7 @@ function viewTx() {
 // Summen je Unterkategorie × Monat für ein Jahr
 function aggregate(year) {
   const m = new Map(); // subId|'none+'|'none-' -> [12]
-  for (const t of S.txs) {
+  for (const t of scoped()) {
     if (+t.booking_date.slice(0, 4) !== year) continue;
     const k = t.subcategory_id && t.assign_state !== 'vorschlag' ? t.subcategory_id : (t.amount < 0 ? 'none-' : 'none+');
     if (!m.has(k)) m.set(k, Array(12).fill(0));
@@ -255,7 +271,7 @@ function viewYear() {
   const year = S.yearSel && ys.includes(S.yearSel) ? S.yearSel : ys[0];
   S.yearSel = year;
   const agg = aggregate(year);
-  const monthsWithData = Math.max(1, new Set(S.txs.filter(t => +t.booking_date.slice(0, 4) === year).map(t => t.booking_date.slice(5, 7))).size);
+  const monthsWithData = Math.max(1, new Set(scoped().filter(t => +t.booking_date.slice(0, 4) === year).map(t => t.booking_date.slice(5, 7))).size);
 
   const section = (title, kind, flip) => {
     let rowsHtml = '', sec = Array(12).fill(0);
@@ -320,7 +336,7 @@ function drawCompareChart() {
   const el = $('#cmpChart'); if (!el || !window.Chart) return;
   const ys = years().slice().reverse();
   const exp = S.cats.filter(c => c.kind === 'ausgabe');
-  const val = (c, y) => -S.txs.filter(t => +t.booking_date.slice(0, 4) === y && t.assign_state !== 'vorschlag' && catOfTx(t)?.id === c.id).reduce((a, t) => a + t.amount, 0);
+  const val = (c, y) => -scoped().filter(t => +t.booking_date.slice(0, 4) === y && t.assign_state !== 'vorschlag' && catOfTx(t)?.id === c.id).reduce((a, t) => a + t.amount, 0);
   const used = exp.filter(c => ys.some(y => val(c, y)));
   const css = getComputedStyle(document.documentElement);
   const palette = ['#1f6f5c', '#c08a2e', '#5b6abf', '#b03a2e', '#7a8b84'];
@@ -341,7 +357,10 @@ function viewCats() {
       ${S.subs.filter(s => s.category_id === c.id).map(s => `<span class="chip">${esc(s.name)}<button class="icon" data-rensub="${s.id}">✎</button><button class="icon" data-delsub="${s.id}">×</button></span>`).join('')}
       <div style="margin-top:8px"><button class="ghost" data-addsub="${c.id}">+ Unterkategorie</button></div></div>`).join('');
   const rules = [...S.rules.values()].filter(r => r.subcategory_id).sort((a, b) => a.match_key.localeCompare(b.match_key));
-  return `<div class="card"><div class="filters"><h2 style="margin:0">Kategorien</h2>
+  const accCard = `<div class="card"><div class="filters"><h2 style="margin:0">Konten</h2>
+      ${S.accounts.map(a => `<span class="chip">${esc(a.name)} <span class="muted">(${S.txs.filter(t => t.account_id === a.id).length})</span><button class="icon" data-renacc="${a.id}">✎</button><button class="icon" data-delacc="${a.id}">×</button></span>`).join('')}
+      <button class="ghost" id="addAcc">+ Konto</button></div></div>`;
+  return accCard + `<div class="card"><div class="filters"><h2 style="margin:0">Kategorien</h2>
       <input id="newCat" placeholder="Neue Kategorie"><select id="newKind"><option value="ausgabe">Ausgabe</option><option value="einnahme">Einnahme</option><option value="umbuchung">Umbuchung</option></select>
       <button class="btn" id="addCat">Anlegen</button></div>
       <p class="muted">„Umbuchung" (z. B. aufs Sparkonto) zählt weder als Einnahme noch als Ausgabe.</p></div>
@@ -358,8 +377,10 @@ function viewCats() {
 // ---------- Render & Events ----------
 function render() {
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
-  const open = S.txs.filter(t => !t.subcategory_id || t.assign_state === 'vorschlag').length;
+  const open = scoped().filter(t => !t.subcategory_id || t.assign_state === 'vorschlag').length;
   const badge = $('#openBadge'); badge.textContent = open; badge.classList.toggle('hidden', !open);
+  $('#accSel').innerHTML = `<option value="alle">Alle Konten</option>` + S.accounts.map(a => `<option value="${a.id}"${a.id === S.acc ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
+  if (S.acc === 'alle') $('#accSel').value = 'alle';
   const v = { import: viewImport, tx: viewTx, year: viewYear, compare: viewCompare, cats: viewCats }[S.view];
   $('#view').innerHTML = v();
   if (S.view === 'compare') drawCompareChart();
@@ -373,8 +394,8 @@ function bindImport() {
     try {
       let msg = '';
       for (const f of files) {
-        const r = await importFile(f);
-        msg += `<div class="stats"><div><span class="muted">${esc(f.name)}</span></div>
+        const r = await importFile(f, $('#impAcc').value);
+        msg += `<div class="stats"><div><span class="muted">${esc(f.name)} → ${esc(accById($('#impAcc').value)?.name)}</span></div>
           <div><b>${r.fresh}</b>neu</div><div><b>${r.dup}</b>schon vorhanden</div><div><b>${r.auto}</b>automatisch zugeordnet</div>
           <div><b>${r.sugg}</b>Vorschläge</div><div><b>${r.open}</b>offen</div>${r.skippedPending ? `<div><b>${r.skippedPending}</b>vorgemerkt (übersprungen)</div>` : ''}</div>`;
       }
@@ -399,6 +420,8 @@ document.addEventListener('change', guard(async e => {
   if (t.id === 'fMonth') { S.f.month = t.value; return render(); }
   if (t.id === 'fCat') { S.f.cat = t.value; return render(); }
   if (t.id === 'ySel') { S.yearSel = +t.value; return render(); }
+  if (t.id === 'accSel') { S.acc = t.value; try { localStorage.setItem('fin_acc', S.acc); } catch {} return render(); }
+  if (t.id === 'impAcc') { S.importAcc = t.value; return; }
 }));
 
 document.addEventListener('keydown', e => {
@@ -450,6 +473,25 @@ document.addEventListener('click', guard(async e => {
     if (error) throw error;
     await loadAll(); return render();
   }
+  if (b.id === 'addAcc') {
+    const name = prompt('Name des Kontos'); if (!name?.trim()) return;
+    const { data, error } = await sb.from('accounts').insert({ name: name.trim(), sort: S.accounts.length }).select().single();
+    if (error) throw error;
+    S.accounts.push(data); return render();
+  }
+  if (d.renacc) {
+    const a = accById(d.renacc), name = prompt('Neuer Name', a.name); if (!name?.trim()) return;
+    const { error } = await sb.from('accounts').update({ name: name.trim() }).eq('id', a.id);
+    if (error) throw error;
+    a.name = name.trim(); return render();
+  }
+  if (d.delacc) {
+    const a = accById(d.delacc), n = S.txs.filter(t => t.account_id === a.id).length;
+    if (!confirm(`Konto „${a.name}" löschen?${n ? ` Dabei werden ${n} Buchung(en) endgültig gelöscht!` : ''}`)) return;
+    const { error } = await sb.from('accounts').delete().eq('id', a.id);
+    if (error) throw error;
+    await loadAll(); return render();
+  }
   if (d.delrule) {
     const { error } = await sb.from('rules').delete().eq('id', d.delrule);
     if (error) throw error;
@@ -468,6 +510,7 @@ async function start() {
   if (!session) { $('#login').classList.remove('hidden'); return; }
   $('#app').classList.remove('hidden');
   $('#view').innerHTML = '<p class="muted">Lade…</p>';
+  try { S.acc = localStorage.getItem('fin_acc') || 'alle'; } catch {}
   try { await loadAll(); } catch (e) { return fail(e); }
   S.view = S.txs.length ? 'tx' : 'import';
   render();
