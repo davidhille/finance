@@ -47,15 +47,31 @@
     return tokens.slice(0, 3).join(' ');
   }
 
-  // Bei Zahlungsdiensten steht der echte Händler im Verwendungszweck
+  // Zahlungsdienste: der echte Händler steht (wenn überhaupt) im Verwendungszweck
+  const PROCESSOR = /paypal|klarna|amazon payments|google payment|unzer/i;
+  function isProcessor(raw) { return PROCESSOR.test(raw || ''); }
+  // Liefert den Händler; bei Zahlungsdiensten ohne erkennbaren Händler: '' (= unbekannt)
   function effectiveParty(raw, purpose) {
-    if (/paypal|klarna|amazon payments/i.test(raw || '')) {
-      const m = /einkauf bei ([^,.;]+)/i.exec(purpose || '');
-      if (m) return m[1].trim();
-    }
-    return raw || '';
+    if (!isProcessor(raw)) return raw || '';
+    const p = purpose || '';
+    let m = /(?:ihr einkauf bei|ihre zahlung an|zahlung an|einkauf bei)\s+([^,;]+)/i.exec(p);
+    if (m) return m[1].trim();
+    if (/abbuchung vom paypal|paypal[- ]guthaben|auszahlung/i.test(p)) return 'PayPal-Guthaben';
+    m = /PP\.\d+\.PP\/\.?\s*([^,/]+)/i.exec(p);
+    if (m && /[a-zäöü]{3}/i.test(m[1]) && !/abbuchung|lastschrift/i.test(m[1])) return m[1].trim();
+    return '';
   }
-  function keyFor(row) { return matchKey(effectiveParty(row.counterparty_raw, row.purpose)); }
+  // Lern-Schlüssel; leer = nicht lernen (z. B. PayPal ohne Händler)
+  function keyFor(row) {
+    const party = effectiveParty(row.counterparty_raw, row.purpose);
+    return party ? matchKey(party) : '';
+  }
+  function displayName(raw, purpose) {
+    const party = effectiveParty(raw, purpose);
+    if (party) return prettyPayee(party);
+    const m = (raw || '').match(PROCESSOR);
+    return m ? m[0].replace(/^./, c => c.toUpperCase()).replace(/^Paypal$/, 'PayPal') : prettyPayee(raw);
+  }
 
   // Lesbarer Vorschlag für den Anzeigenamen
   function prettyPayee(raw) {
@@ -98,7 +114,7 @@
       const party = c.legacyParty >= 0 ? g('legacyParty') : (amount < 0 ? g('payee') : g('payer'));
       const r = {
         booking_date: date, amount,
-        counterparty_raw: party, payee: prettyPayee(effectiveParty(party, g('purpose'))),
+        counterparty_raw: party, payee: displayName(party, g('purpose')),
         purpose: g('purpose'), iban: g('iban'), tx_type: g('type'),
       };
       // Hash inkl. laufender Nummer, damit zwei identische Käufe am selben Tag beide zählen
@@ -110,6 +126,6 @@
     return { rows, skippedPending };
   }
 
-  const api = { decode, parseDKB, matchKey, keyFor, prettyPayee, parseAmount, parseDate };
+  const api = { decode, parseDKB, matchKey, keyFor, prettyPayee, displayName, isProcessor, parseAmount, parseDate };
   if (typeof module !== 'undefined') module.exports = api; else root.FinParser = api;
 })(this);

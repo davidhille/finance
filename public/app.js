@@ -66,6 +66,26 @@ async function loadAll() {
     S.accounts = data.sort((x, y) => x.sort - y.sort);
   }
   if (S.acc !== 'alle' && !accById(S.acc)) S.acc = 'alle';
+  await repairProcessorRules();
+}
+
+// Einmalige Reparatur: Sammelregeln für Zahlungsdienste (z. B. "paypal europe ...") entfernen
+// und automatisch zugeordnete PayPal-Buchungen mit den neuen Händler-Schlüsseln neu bewerten
+async function repairProcessorRules() {
+  const bad = [...S.rules.values()].filter(r => P.isProcessor(r.match_key) && r.match_key !== 'paypal guthaben');
+  if (!bad.length) return;
+  const { error } = await sb.from('rules').delete().in('id', bad.map(r => r.id));
+  if (error) throw error;
+  bad.forEach(r => S.rules.delete(r.match_key));
+  let reset = 0;
+  for (const t of S.txs.filter(t => P.isProcessor(t.counterparty_raw) && t.assign_state !== 'manuell')) {
+    const m = findRule(keyOf(t));
+    const patch = { payee: P.displayName(t.counterparty_raw, t.purpose),
+      subcategory_id: m?.rule.subcategory_id || null, assign_state: m?.rule.subcategory_id ? m.state : null };
+    if (patch.subcategory_id !== t.subcategory_id) reset++;
+    await updateTxs([t.id], patch);
+  }
+  setTimeout(() => toast(`PayPal-Zuordnungen bereinigt: ${reset} Buchung(en) neu bewertet`), 300);
 }
 
 async function seedDefaults() {
@@ -169,6 +189,7 @@ async function setCategory(id, subId) {
   const key = keyOf(t);
   await updateTxs([id], { subcategory_id: subId || null, assign_state: subId ? 'manuell' : null });
   if (!subId) return render();
+  if (!key) { toast('Gespeichert (ohne Lernen – Händler unbekannt)'); return render(); }
   await saveRule(key, { subcategory_id: subId, payee: t.payee });
   // Lernen: gleiche Händler, die noch nicht manuell zugeordnet sind, mitziehen
   const others = S.txs.filter(x => x.id !== id && x.assign_state !== 'manuell' && keyOf(x) === key && x.subcategory_id !== subId);
@@ -183,6 +204,7 @@ async function setPayee(id, name) {
   if (!name || name === t.payee) return;
   const key = keyOf(t), old = t.payee;
   await updateTxs([id], { payee: name });
+  if (!key) { toast('Umbenannt'); return render(); }
   await saveRule(key, { payee: name, hits: S.rules.get(key)?.hits || 0 });
   const same = S.txs.filter(x => x.id !== id && keyOf(x) === key && x.payee === old);
   await updateTxs(same.map(x => x.id), { payee: name });
