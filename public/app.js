@@ -368,6 +368,51 @@ function aggregate(year) {
 const add = (a, b) => a.map((v, i) => v + b[i]);
 const total = a => a.reduce((x, y) => x + y, 0);
 
+// ---------- Jahresergebnis ----------
+// Kennzahlen eines Jahres, optional nur bis Monat maxMonth (für fairen Vergleich mit dem laufenden Jahr)
+function yearResult(year, maxMonth = 12) {
+  const r = { inc: 0, exp: 0, umb: 0, n: 0 };
+  for (const t of scoped()) {
+    if (+t.booking_date.slice(0, 4) !== year || +t.booking_date.slice(5, 7) > maxMonth) continue;
+    r.n++;
+    const c = t.subcategory_id && t.assign_state !== 'vorschlag' ? catOfTx(t) : null;
+    const kind = c ? c.kind : (t.amount < 0 ? 'ausgabe' : 'einnahme');
+    if (kind === 'umbuchung') r.umb += t.amount;
+    else if (kind === 'einnahme') r.inc += t.amount;
+    else r.exp -= t.amount;
+  }
+  r.result = r.inc - r.exp;
+  r.rate = r.inc ? r.result / r.inc : null;
+  r.change = r.result + r.umb;
+  return r;
+}
+const lastMonthOf = year => Math.max(0, ...scoped().filter(t => +t.booking_date.slice(0, 4) === year).map(t => +t.booking_date.slice(5, 7)));
+const pct = v => v === null || !isFinite(v) ? '–' : (v * 100).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' %';
+// Kennzahlen-Definition: key, Label, Format, "höher ist besser"
+const METRICS = [
+  ['inc', 'Einnahmen', eur, true], ['exp', 'Ausgaben', eur, false], ['result', 'Jahresergebnis', eur, true],
+  ['rate', 'Sparquote', pct, true], ['umb', 'Umbuchungen (netto)', eur, null], ['change', 'Kontoveränderung', eur, true],
+];
+function deltaTxt(key, cur, prev, better) {
+  if (prev == null || cur == null) return '';
+  const d = cur - prev;
+  if (!d) return '<span class="muted">±0</span>';
+  const txt = key === 'rate' ? `${d > 0 ? '+' : ''}${(d * 100).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Pkt.` : `${d > 0 ? '+' : ''}${eur(d)}`;
+  const cls = better === null ? 'muted' : (d > 0) === better ? 'pos' : 'neg';
+  return `<span class="${cls}">${txt}</span>`;
+}
+function resultTiles(year) {
+  const lm = lastMonthOf(year) || 12;
+  const cur = yearResult(year, lm);
+  const prevHas = scoped().some(t => +t.booking_date.slice(0, 4) === year - 1);
+  const prev = prevHas ? yearResult(year - 1, lm) : null;
+  const span = lm < 12 ? `Jan–${MONTHS[lm - 1]}` : 'ganzes Jahr';
+  return `<div class="tiles">${METRICS.map(([k, label, fmt, better]) => `<div class="tile${k === 'result' ? ' main' : ''}">
+      <div class="tl">${label}</div><div class="tv ${k === 'result' || k === 'change' ? sign(cur[k]) : ''}">${fmt(cur[k])}</div>
+      ${prev ? `<div class="td">${deltaTxt(k, cur[k], prev[k], better)} <span class="muted">vs. ${year - 1}</span></div>` : ''}</div>`).join('')}</div>
+    <p class="muted" style="margin:6px 0 0;font-size:12px">${year}: ${span}${prev ? ` · Vergleich mit ${year - 1} im gleichen Zeitraum` : ''} · Ergebnis = Einnahmen − Ausgaben · Kontoveränderung = Ergebnis + Umbuchungen</p>`;
+}
+
 function viewYear() {
   const ys = years();
   if (!ys.length) return `<div class="card muted">Noch keine Buchungen – zuerst importieren.</div>`;
@@ -402,8 +447,9 @@ function viewYear() {
   const saldo = add(add(inc.sum, exp.sum), umb.sum);
   return `<div class="card">
     <div class="filters"><h2 style="margin:0">Übersicht</h2>
-      <select id="ySel">${ys.map(v => `<option${v === year ? ' selected' : ''}>${v}</option>`).join('')}</select>
-      <span class="muted">Ausgaben positiv · Umbuchungen mit Vorzeichen · Kategorie anklicken = Unterkategorien · Betrag anklicken = Buchungen</span></div>
+      <select id="ySel">${ys.map(v => `<option${v === year ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
+    ${resultTiles(year)}
+    <p class="muted" style="margin:16px 0 8px">Ausgaben positiv · Umbuchungen mit Vorzeichen · Kategorie anklicken = Unterkategorien · Betrag anklicken = Buchungen</p>
     <div class="tablewrap"><table>
       <thead><tr><th></th>${MONTHS.map(m => `<th class="num">${m}</th>`).join('')}<th class="num">Jahr</th><th class="num">Ø Monat</th></tr></thead>
       <tbody>${inc.html}${exp.html}${umb.html}
@@ -415,7 +461,11 @@ function viewCompare() {
   const ys = years().slice().reverse();
   if (ys.length < 1) return `<div class="card muted">Noch keine Buchungen – zuerst importieren.</div>`;
   const byYear = Object.fromEntries(ys.map(y => [y, aggregate(y)]));
-  const catSum = (c, y) => S.subs.filter(s => s.category_id === c.id).reduce((a, s) => a + total(byYear[y].get(s.id) || []), 0);
+  const curY = ys[ys.length - 1], lm = lastMonthOf(curY) || 12, partial = lm < 12 && ys.length > 1;
+  const cap = S.cmpYtd && partial ? lm : 12;
+  const capSum = arr => (arr || []).slice(0, cap).reduce((x, y) => x + y, 0);
+  const catSum = (c, y) => S.subs.filter(s => s.category_id === c.id).reduce((a, s) => a + capSum(byYear[y].get(s.id)), 0);
+  const res = ys.map(y => yearResult(y, cap));
   const rows = S.cats.map(c => {
     const flip = c.kind === 'ausgabe' ? -1 : 1;
     const vals = ys.map(y => flip * catSum(c, y));
@@ -428,20 +478,30 @@ function viewCompare() {
     const d = b - a, pct = a ? (d / Math.abs(a)) * 100 : null;
     return `<td class="num">${eur(d)}</td><td class="num muted">${pct === null ? '–' : (pct > 0 ? '+' : '') + pct.toFixed(0) + ' %'}</td>`;
   };
-  return `<div class="card"><h2>Jahresvergleich</h2>
+  const sumRows = METRICS.map(([k, label, fmt, better]) => `<tr class="${k === 'result' ? 'cat' : ''}"><td>${label}</td>
+      ${res.map(r => `<td class="num ${k === 'result' || k === 'change' ? sign(r[k]) : ''}">${fmt(r[k])}</td>`).join('')}
+      ${ys.length > 1 ? `<td class="num" colspan="2">${deltaTxt(k, res[last][k], res[last - 1][k], better)}</td>` : ''}</tr>`).join('');
+  return `<div class="card"><div class="filters"><h2 style="margin:0">Jahresvergleich</h2>
+      ${partial ? `<label class="muted" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="cmpYtd"${S.cmpYtd ? ' checked' : ''}> alle Jahre nur Jan–${MONTHS[lm - 1]} (wie ${curY})</label>` : ''}</div>
+    <h2 style="margin-top:8px">Jahresergebnis</h2>
+    <div class="tablewrap"><table><thead><tr><th></th>${ys.map(y => `<th class="num">${y}</th>`).join('')}
+      ${ys.length > 1 ? `<th class="num" colspan="2">Δ ${ys[last]} vs ${ys[last - 1]}</th>` : ''}</tr></thead>
+      <tbody>${sumRows}</tbody></table></div>
+    <h2 style="margin-top:24px">Nach Kategorie</h2>
     <div style="height:320px;margin-bottom:16px"><canvas id="cmpChart"></canvas></div>
     <div class="tablewrap"><table><thead><tr><th>Kategorie</th>${ys.map(y => `<th class="num">${y}</th>`).join('')}
       ${ys.length > 1 ? `<th class="num">Δ ${ys[last]} vs ${ys[last - 1]}</th><th class="num">%</th>` : ''}</tr></thead>
       <tbody>${rows.map(r => `<tr><td>${esc(r.c.name)} <span class="kind">${r.c.kind}</span></td>${r.vals.map(v => `<td class="num">${eur(v)}</td>`).join('')}${delta(r.vals)}</tr>`).join('')}</tbody>
     </table></div>
-    <p class="muted">Hinweis: Das laufende Jahr ist noch nicht vollständig – Vergleich entsprechend lesen.</p></div>`;
+    <p class="muted">${partial && !S.cmpYtd ? `Hinweis: ${curY} enthält erst Daten bis ${MONTHS[lm - 1]} – für einen fairen Vergleich oben „nur Jan–${MONTHS[lm - 1]}" aktivieren.` : cap < 12 ? `Alle Jahre: nur Jan–${MONTHS[cap - 1]}.` : ''}</p></div>`;
 }
 
 function drawCompareChart() {
   const el = $('#cmpChart'); if (!el || !window.Chart) return;
   const ys = years().slice().reverse();
   const exp = S.cats.filter(c => c.kind === 'ausgabe');
-  const val = (c, y) => -scoped().filter(t => +t.booking_date.slice(0, 4) === y && t.assign_state !== 'vorschlag' && catOfTx(t)?.id === c.id).reduce((a, t) => a + t.amount, 0);
+  const lm = lastMonthOf(ys[ys.length - 1]) || 12, cap = S.cmpYtd && lm < 12 && ys.length > 1 ? lm : 12;
+  const val = (c, y) => -scoped().filter(t => +t.booking_date.slice(0, 4) === y && +t.booking_date.slice(5, 7) <= cap && t.assign_state !== 'vorschlag' && catOfTx(t)?.id === c.id).reduce((a, t) => a + t.amount, 0);
   const used = exp.filter(c => ys.some(y => val(c, y)));
   const css = getComputedStyle(document.documentElement);
   const palette = ['#1f6f5c', '#c08a2e', '#5b6abf', '#b03a2e', '#7a8b84'];
@@ -835,6 +895,7 @@ document.addEventListener('change', guard(async e => {
   if (t.id === 'fMonth') { S.f.month = t.value; return render(); }
   if (t.id === 'fCat') { S.f.cat = t.value; return render(); }
   if (t.id === 'ySel') { S.yearSel = +t.value; return render(); }
+  if (t.id === 'cmpYtd') { S.cmpYtd = t.checked; return render(); }
   if (t.id === 'accSel') { S.acc = t.value; try { localStorage.setItem('fin_acc', S.acc); } catch {} return render(); }
   if (t.id === 'impAcc') { S.importAcc = t.value; return; }
 }));
