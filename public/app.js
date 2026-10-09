@@ -701,7 +701,7 @@ document.addEventListener('change', guard(async e => {
   if (t.dataset.scope) {
     const c = catById(t.dataset.scope), account_id = t.value || null;
     const { error } = await sb.from('categories').update({ account_id }).eq('id', c.id);
-    if (error) throw /account_id/.test(error.message) ? new Error('Bitte migrations/005_kategorie_konto.sql in Supabase ausführen') : error;
+    if (error) { render(); throw /account_id/.test(error.message) ? new Error('Bitte migrations/005_kategorie_konto.sql in Supabase ausführen') : error; }
     c.account_id = account_id; toast(`${c.name}: ${scopeTxt(c)}`); return render();
   }
   if (t.id === 'edAcc') { const cur = $('#edSub').value; $('#edSub').innerHTML = subOptions(cur, false, t.value); $('#edSub').value = cur; return; }

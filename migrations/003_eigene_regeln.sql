@@ -21,3 +21,5 @@ create policy own_rows on user_rules for all to authenticated
 
 revoke all on user_rules from anon;
 grant select, insert, update, delete on user_rules to authenticated;
+
+notify pgrst, 'reload schema';

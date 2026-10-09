@@ -20,3 +20,5 @@ grant select, insert, update, delete on accounts to authenticated;
 
 alter table transactions add column if not exists account_id uuid references accounts on delete cascade;
 create index if not exists transactions_account on transactions (account_id);
+
+notify pgrst, 'reload schema';
