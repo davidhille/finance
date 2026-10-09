@@ -263,7 +263,7 @@ input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
 
 <dialog id="choiceDlg">
   <form method="dialog">
-    <h2 id="chTitle"></h2>
+    <h2 id="chTitle" tabindex="-1" style="outline:none"></h2>
     <p id="chText" style="white-space:pre-line"></p>
     <div class="actions" id="chButtons" style="flex-wrap:wrap"></div>
   </form>
@@ -303,6 +303,7 @@ input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
     </div>
     <label for="ruSub">dann Kategorie</label><select id="ruSub" required></select>
     <label for="ruPayee">und Empfänger umbenennen in (optional)</label><input id="ruPayee" placeholder="leer = Name nicht ändern">
+    <label id="ruManualBox" class="hidden" style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="checkbox" id="ruManual" style="width:auto"> Kategorie auch bei manuell zugeordneten Buchungen setzen</label>
     <p class="muted" id="ruPreview" style="font-size:12px;margin:12px 0 0"></p>
     <div class="actions">
       <button type="button" class="ghost" id="ruCancel">Abbrechen</button>

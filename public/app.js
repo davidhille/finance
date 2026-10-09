@@ -252,12 +252,20 @@ async function setPayee(id, name) {
   name = name.trim();
   if (!name || name === t.payee) return;
   const key = keyOf(t), old = t.payee;
+  const same = key ? S.txs.filter(x => x.id !== id && keyOf(x) === key && x.payee === old) : [];
+  let scope = 'one';
+  if (same.length) {
+    scope = await askChoice(`„${old}" umbenennen in „${name}"?`,
+      `${same.length} weitere Buchung(en) heißen ebenfalls „${old}".\n\nTipp: Nur einen Teil umbenennen (z. B. alle Kartenzahlungen)? Dafür „Nur diese" wählen oder eine eigene Regel mit Verwendungszweck anlegen.`,
+      [{ value: 'one', label: 'Nur diese Buchung' }, { value: 'all', label: `Alle ${same.length + 1} umbenennen`, primary: true }]);
+    if (!scope) return render();
+  }
   await updateTxs([id], { payee: name });
-  if (!key) { toast('Umbenannt'); return render(); }
-  await saveRule(key, { payee: name, hits: S.rules.get(key)?.hits || 0 });
-  const same = S.txs.filter(x => x.id !== id && keyOf(x) === key && x.payee === old);
-  await updateTxs(same.map(x => x.id), { payee: name });
-  toast(same.length ? `Umbenannt – auch bei ${same.length} weiteren Buchung(en)` : 'Umbenannt');
+  if (scope === 'all') {
+    await saveRule(key, { payee: name, hits: S.rules.get(key)?.hits || 0 });
+    await updateTxs(same.map(x => x.id), { payee: name });
+  }
+  toast(scope === 'all' ? `Umbenannt – auch bei ${same.length} weiteren Buchung(en)` : 'Umbenannt (nur diese Buchung)');
   render();
 }
 
@@ -740,6 +748,7 @@ function askChoice(title, text, buttons) {
     $('#chButtons').onclick = e => { const b = e.target.closest('[data-choice]'); if (b) done(b.dataset.choice); };
     dlg.oncancel = e => { e.preventDefault(); done(null); };
     dlg.showModal();
+    $('#chTitle').focus(); // kein Knopf vorausgewählt → Enter löst nichts versehentlich aus
   });
 }
 // Vor einer Konto-Umstellung: betroffene Buchungen klären. Rückgabe 'reset' | 'keep' | null (abbrechen)
@@ -844,7 +853,7 @@ function openRuleDialog(rule = null, prefill = {}) {
   $('#ruAcc').innerHTML = `<option value="">Alle Konten</option>` + S.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
   $('#ruAcc').value = r.account_id || '';
   $('#ruSub').innerHTML = subOptions(r.subcategory_id, false, r.account_id).replace('<option value="">– offen –</option>', '<option value="">– Kategorie wählen –</option>');
-  $('#ruPayee').value = r.payee || '';
+  $('#ruPayee').value = r.payee || ''; $('#ruManual').checked = false;
   updateRulePreview();
   $('#ruleDlg').showModal(); $('#ruPattern').focus();
 }
@@ -859,10 +868,12 @@ function updateRulePreview() {
   const r = ruleFromDialog();
   if (!r.pattern) { $('#ruPreview').textContent = 'Empfänger und/oder Verwendungszweck eingeben.'; return; }
   const hits = S.txs.filter(t => ruleMatches(r, t));
-  const manual = hits.filter(t => t.assign_state === 'manuell').length;
+  const manual = hits.filter(t => t.assign_state === 'manuell').length, inc = $('#ruManual').checked;
   const names = [...new Set(hits.map(t => t.payee))].slice(0, 4).join(', ');
+  $('#ruManualBox').classList.toggle('hidden', !manual);
   $('#ruPreview').textContent = hits.length
-    ? `${hits.length} passende Buchung(en)${manual ? `, davon ${manual} manuell zugeordnet (bleiben unverändert)` : ''} – z. B. ${names}`
+    ? `${hits.length} passende Buchung(en) – z. B. ${names}.` + (r.payee ? ` Name wird bei allen ${hits.length} geändert.` : '') +
+      (manual ? ` Kategorie: ${inc ? `bei allen` : `bei ${hits.length - manual}, die ${manual} manuell zugeordneten bleiben`}.` : '')
     : 'Noch keine passende Buchung – gilt dann für künftige Importe.';
 }
 const migHint = e => /purpose_pattern/.test(e.message || '') ? new Error('Bitte migrations/004_regel_zweck.sql in Supabase ausführen') : e;
@@ -880,17 +891,20 @@ async function submitRuleDialog() {
     S.userRules.push(data);
   }
   $('#ruleDlg').close(); ruId = null;
-  // Auf vorhandene, nicht manuell zugeordnete Buchungen anwenden
-  const hits = S.txs.filter(t => t.assign_state !== 'manuell' && ruleMatches(r, t) && subAllowed(r.subcategory_id, t.account_id));
+  // Auf vorhandene Buchungen anwenden: Name bei allen Treffern, Kategorie bei nicht manuellen (oder auf Wunsch allen)
+  const incManual = $('#ruManual').checked;
+  const all = S.txs.filter(t => ruleMatches(r, t));
+  const hits = all.filter(t => (incManual || t.assign_state !== 'manuell') && subAllowed(r.subcategory_id, t.account_id));
   const bySub = hits.filter(t => t.subcategory_id !== r.subcategory_id || t.assign_state === 'vorschlag');
   await updateTxs(bySub.map(t => t.id), { subcategory_id: r.subcategory_id, assign_state: 'auto' });
-  if (r.payee) await updateTxs(hits.filter(t => t.payee !== r.payee).map(t => t.id), { payee: r.payee });
-  toast(`Regel gespeichert – ${bySub.length} Buchung(en) zugeordnet`);
+  const renamed = r.payee ? all.filter(t => t.payee !== r.payee) : [];
+  await updateTxs(renamed.map(t => t.id), { payee: r.payee });
+  toast(`Regel gespeichert – ${bySub.length} zugeordnet${renamed.length ? `, ${renamed.length} umbenannt` : ''}`);
   render();
 }
 $('#ruleForm').addEventListener('submit', e => { e.preventDefault(); submitRuleDialog().catch(fail); });
 $('#ruCancel').onclick = () => { $('#ruleDlg').close(); ruId = null; };
-['ruPattern', 'ruPurpose', 'ruDir', 'ruAcc'].forEach(id => $('#' + id).addEventListener('input', updateRulePreview));
+['ruPattern', 'ruPurpose', 'ruDir', 'ruAcc', 'ruManual', 'ruPayee'].forEach(id => $('#' + id).addEventListener('input', updateRulePreview));
 $('#edRule').onclick = () => {
   const t = S.txs.find(x => x.id === edId); if (!t) return;
   $('#editDlg').close(); edId = null;
@@ -1409,7 +1423,7 @@ document.addEventListener('change', guard(async e => {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.id === 'pMergeName') { e.preventDefault(); mergePayees([...S.psel], e.target.value).catch(fail); }
-  if (e.key === 'Enter' && (e.target.dataset.payee || e.target.dataset.budget)) e.target.blur();
+  if (e.key === 'Enter' && (e.target.dataset.payee || e.target.dataset.budget)) { e.preventDefault(); e.target.blur(); }
   if (e.key === 'Enter' && e.target.id === 'bulkTag') { e.preventDefault(); bulkTag().catch(fail); }
 });
 
