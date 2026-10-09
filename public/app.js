@@ -37,6 +37,8 @@ const keyOf = t => P.keyFor(t);
 const accById = id => S.accounts.find(a => a.id === id);
 // Kategorie sichtbar für Konto? (account_id leer = alle Konten)
 const catVisible = (c, accId) => !c.account_id || !accId || accId === 'alle' || c.account_id === accId;
+// Unterkategorie für das Konto der Buchung erlaubt?
+const subAllowed = (subId, accId) => { const c = catById(subById(subId)?.category_id); return !!c && catVisible(c, accId); };
 const scopeTxt = c => c.account_id ? 'nur ' + (accById(c.account_id)?.name || '?') : 'alle Konten';
 // Buchungen im gewählten Konto (oder alle)
 const scoped = () => S.acc === 'alle' ? S.txs : S.txs.filter(t => t.account_id === S.acc);
@@ -189,9 +191,9 @@ async function importFile(file, accountId) {
   for (const r of [...fresh, ...dups.map(d => d.row)]) {
     r.subcategory_id = null; r.assign_state = null;
     const ur = findUserRule(r);
-    if (ur) { r.subcategory_id = ur.subcategory_id; r.assign_state = 'auto'; if (ur.payee) r.payee = ur.payee; continue; }
+    if (ur && subAllowed(ur.subcategory_id, accountId)) { r.subcategory_id = ur.subcategory_id; r.assign_state = 'auto'; if (ur.payee) r.payee = ur.payee; continue; }
     const m = findRule(keyOf(r));
-    if (m && m.rule.subcategory_id) {
+    if (m && m.rule.subcategory_id && subAllowed(m.rule.subcategory_id, accountId)) {
       r.subcategory_id = m.rule.subcategory_id; r.assign_state = m.state;
       if (m.state === 'auto' && m.rule.payee) r.payee = m.rule.payee;
     }
@@ -216,7 +218,7 @@ async function setCategory(id, subId) {
   if (!key) { toast('Gespeichert (ohne Lernen – Händler unbekannt)'); return render(); }
   await saveRule(key, { subcategory_id: subId, payee: t.payee });
   // Lernen: gleiche Händler, die noch nicht manuell zugeordnet sind, mitziehen
-  const others = S.txs.filter(x => x.id !== id && x.assign_state !== 'manuell' && keyOf(x) === key && x.subcategory_id !== subId);
+  const others = S.txs.filter(x => x.id !== id && x.assign_state !== 'manuell' && keyOf(x) === key && x.subcategory_id !== subId && subAllowed(subId, x.account_id));
   await updateTxs(others.map(x => x.id), { subcategory_id: subId, assign_state: 'auto' });
   toast(others.length ? `Gespeichert – ${others.length} ähnliche Buchung(en) ebenfalls zugeordnet` : 'Gespeichert');
   render();
@@ -660,7 +662,7 @@ async function submitRuleDialog() {
   }
   $('#ruleDlg').close(); ruId = null;
   // Auf vorhandene, nicht manuell zugeordnete Buchungen anwenden
-  const hits = S.txs.filter(t => t.assign_state !== 'manuell' && ruleMatches(r, t));
+  const hits = S.txs.filter(t => t.assign_state !== 'manuell' && ruleMatches(r, t) && subAllowed(r.subcategory_id, t.account_id));
   const bySub = hits.filter(t => t.subcategory_id !== r.subcategory_id || t.assign_state === 'vorschlag');
   await updateTxs(bySub.map(t => t.id), { subcategory_id: r.subcategory_id, assign_state: 'auto' });
   if (r.payee) await updateTxs(hits.filter(t => t.payee !== r.payee).map(t => t.id), { payee: r.payee });
@@ -754,7 +756,15 @@ document.addEventListener('change', guard(async e => {
     const c = catById(t.dataset.scope), account_id = t.value || null;
     const { error } = await sb.from('categories').update({ account_id }).eq('id', c.id);
     if (error) { render(); throw /account_id/.test(error.message) ? new Error('Bitte migrations/005_kategorie_konto.sql in Supabase ausführen') : error; }
-    c.account_id = account_id; toast(`${c.name}: ${scopeTxt(c)}`); return render();
+    c.account_id = account_id;
+    const subIds = S.subs.filter(x => x.category_id === c.id).map(x => x.id);
+    const orphan = S.txs.filter(x => subIds.includes(x.subcategory_id) && !catVisible(c, x.account_id));
+    if (orphan.length) {
+      const per = S.accounts.map(a => [a.name, orphan.filter(x => x.account_id === a.id).length]).filter(([, n]) => n).map(([a, n]) => `${n} ${a}`).join(', ');
+      if (confirm(`„${c.name}" gilt jetzt ${scopeTxt(c)}.\n\n${orphan.length} Buchung(en) aus anderen Konten sind ihr noch zugeordnet (${per}).\n\nOK = diese wieder auf „offen" setzen\nAbbrechen = Zuordnung behalten`))
+        await updateTxs(orphan.map(x => x.id), { subcategory_id: null, assign_state: null });
+    }
+    toast(`${c.name}: ${scopeTxt(c)}`); return render();
   }
   if (t.id === 'edAcc') { const cur = $('#edSub').value; $('#edSub').innerHTML = subOptions(cur, false, t.value); $('#edSub').value = cur; return; }
   if (t.id === 'ruAcc') { const cur = $('#ruSub').value; $('#ruSub').innerHTML = subOptions(cur, false, t.value || null).replace('<option value="">– offen –</option>', '<option value="">– Kategorie wählen –</option>'); $('#ruSub').value = cur; return; }
