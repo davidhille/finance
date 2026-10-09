@@ -301,16 +301,43 @@ async function resolveDups(idxs, doImport) {
   render();
 }
 
+// Betragssuche: "36,73" · "-36,73" · "36" (36,00–36,99) · ">100" · "<=20" · "50-100" / "50..100" / "50 bis 100"
+function num(sv) {
+  sv = sv.replace(/[€\s]/g, '');
+  if (sv.includes(',')) sv = sv.replace(/\./g, '').replace(',', '.');
+  else if (!/^[+-]?\d+\.\d{1,2}$/.test(sv)) sv = sv.replace(/\./g, '');
+  return sv === '' || isNaN(+sv) ? NaN : +sv;
+}
+function amountMatcher(q) {
+  const x = q.trim().replace(/€/g, '').trim();
+  let m;
+  if ((m = /^(<=|>=|<|>)\s*([\d.,]+)$/.exec(x))) {
+    const v = num(m[2]); if (isNaN(v)) return null;
+    return a => { a = Math.abs(a); return m[1] === '<' ? a < v : m[1] === '<=' ? a <= v : m[1] === '>' ? a > v : a >= v; };
+  }
+  if ((m = /^([\d.,]+)\s*(?:-|–|\.\.|bis)\s*([\d.,]+)$/.exec(x))) {
+    const lo = num(m[1]), hi = num(m[2]); if (isNaN(lo) || isNaN(hi)) return null;
+    return a => Math.abs(a) >= Math.min(lo, hi) && Math.abs(a) <= Math.max(lo, hi);
+  }
+  if ((m = /^([+-])?\s*([\d.,]+)$/.exec(x))) {
+    const v = num(m[2]); if (isNaN(v)) return null;
+    const exact = /[.,]\d{1,2}$/.test(m[2]);
+    return a => (m[1] === '-' ? a < 0 : m[1] === '+' ? a > 0 : true) &&
+      (exact ? Math.round(Math.abs(a) * 100) === Math.round(v * 100) : Math.floor(Math.abs(a)) === Math.floor(v));
+  }
+  return null;
+}
+
 function filteredTxs() {
   const { year, month, cat, q } = S.f;
-  const ql = q.toLowerCase();
+  const ql = q.toLowerCase(), amt = q.trim() ? amountMatcher(q) : null;
   return scoped().filter(t => {
     if (year !== 'alle' && t.booking_date.slice(0, 4) !== year) return false;
     if (month !== 'alle' && +t.booking_date.slice(5, 7) !== +month) return false;
     if (cat === 'offen' && t.subcategory_id && t.assign_state !== 'vorschlag') return false;
     if (cat.startsWith('sub:')) { if (t.subcategory_id !== cat.slice(4) || t.assign_state === 'vorschlag') return false; }
     else if (cat !== 'alle' && cat !== 'offen' && catOfTx(t)?.id !== cat) return false;
-    if (ql && !(t.payee + ' ' + t.purpose + ' ' + t.counterparty_raw).toLowerCase().includes(ql)) return false;
+    if (ql && !(amt ? amt(t.amount) : (t.payee + ' ' + t.purpose + ' ' + t.counterparty_raw).toLowerCase().includes(ql))) return false;
     return true;
   });
 }
@@ -343,7 +370,7 @@ function viewTx() {
         ${S.cats.filter(c => catVisible(c, S.acc) || S.f.cat === c.id).map(c => `<option value="${c.id}"${S.f.cat === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
         ${S.f.cat.startsWith('sub:') ? (s => `<option value="${S.f.cat}" selected>${esc(catById(s?.category_id)?.name)} › ${esc(s?.name)}</option>`)(subById(S.f.cat.slice(4))) : ''}
       </select>
-      <input id="fQ" placeholder="Suche…" value="${esc(S.f.q)}">
+      <input id="fQ" placeholder="Text oder Betrag (36,73 · >100 · 50-100)" title="Text: Empfänger/Zweck · Betrag: 36,73 genau · 36 = 36,00–36,99 · -36,73 nur Ausgaben · >100 · <=20 · 50-100" style="min-width:240px" value="${esc(S.f.q)}">
       <span class="spacer" style="flex:1"></span>
       <span class="muted">${list.length} Buchungen · Summe <b class="num ${sign(sum)}">${eur(sum)}</b></span>
     </div>
