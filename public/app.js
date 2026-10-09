@@ -35,6 +35,9 @@ const catById = id => S.cats.find(c => c.id === id);
 const catOfTx = t => { const s = subById(t.subcategory_id); return s ? catById(s.category_id) : null; };
 const keyOf = t => P.keyFor(t);
 const accById = id => S.accounts.find(a => a.id === id);
+// Unterkategorien alphabetisch, "Sonstiges" immer zuletzt
+const subCmp = (a, b) => (a.name === 'Sonstiges') - (b.name === 'Sonstiges') || a.name.localeCompare(b.name, 'de');
+const sortSubs = () => S.subs.sort(subCmp);
 // Kategorie sichtbar für Konto? (account_id leer = alle Konten)
 const catVisible = (c, accId) => !c.account_id || !accId || accId === 'alle' || c.account_id === accId;
 // Unterkategorie für das Konto der Buchung erlaubt?
@@ -53,7 +56,7 @@ async function loadAll() {
     sb.from('rules').select('*'),
   ]);
   for (const x of [a, c, s, r]) if (x.error) throw x.error;
-  S.accounts = a.data; S.cats = c.data; S.subs = s.data;
+  S.accounts = a.data; S.cats = c.data; S.subs = s.data; sortSubs();
   S.rules = new Map(r.data.map(x => [x.match_key, x]));
   const ur = await sb.from('user_rules').select('*').order('sort').order('created_at');
   S.noUserRules = !!ur.error; S.userRules = ur.error ? [] : ur.data;
@@ -462,7 +465,8 @@ function viewCats() {
   const shown = S.cats.filter(c => catVisible(c, S.acc)), hidden = S.cats.filter(c => !catVisible(c, S.acc));
   const scopeSel = c => `<select class="scope" data-scope="${c.id}" title="Für welche Konten?"><option value="">alle Konten</option>${S.accounts.map(a => `<option value="${a.id}"${c.account_id === a.id ? ' selected' : ''}>nur ${esc(a.name)}</option>`).join('')}</select>`;
   const cards = shown.map(c => `<div class="card"><h2>${esc(c.name)} ${badge(catCnt(c), c.id)}<span class="kind">${c.kind}</span>
-      <button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button></h2>
+      <button class="icon" data-rencat="${c.id}" title="Umbenennen">✎</button><button class="icon" data-delcat="${c.id}" title="Löschen">×</button>
+      <span style="float:right;white-space:nowrap"><button class="icon" data-catmove="${c.id}|-1" title="Nach vorne"${S.cats[0] === c ? ' disabled' : ''}>◀</button><button class="icon" data-catmove="${c.id}|1" title="Nach hinten"${S.cats[S.cats.length - 1] === c ? ' disabled' : ''}>▶</button></span></h2>
       <div style="margin:-6px 0 8px">${scopeSel(c)}</div>
       ${S.subs.filter(s => s.category_id === c.id).map(s => `<span class="chip${catVisible(s, S.acc) ? '' : ' dim'}"${s.account_id ? ` title="${scopeTxt(s)}"` : ''}>${esc(s.name)}${s.account_id ? `<span class="kind">${scopeTxt(s)}</span>` : ''} ${badge(cnt.get(s.id) || 0, 'sub:' + s.id)}<button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}">×</button></span>`).join('')}
       <div style="margin-top:8px"><button class="ghost" data-addsub="${c.id}">+ Unterkategorie</button></div></div>`).join('');
@@ -473,7 +477,8 @@ function viewCats() {
   return accCard + `<div class="card"><div class="filters"><h2 style="margin:0">Kategorien</h2>
       <input id="newCat" placeholder="Neue Kategorie"><select id="newKind"><option value="ausgabe">Ausgabe</option><option value="einnahme">Einnahme</option><option value="umbuchung">Umbuchung</option></select>
       <select id="newScope"><option value="">alle Konten</option>${S.accounts.map(a => `<option value="${a.id}"${S.acc === a.id ? ' selected' : ''}>nur ${esc(a.name)}</option>`).join('')}</select>
-      <button class="btn" id="addCat">Anlegen</button></div>
+      <button class="btn" id="addCat">Anlegen</button>
+      <span class="spacer" style="flex:1"></span><button class="ghost" id="sortAZ" title="Einnahmen, Ausgaben, Umbuchungen – jeweils alphabetisch">A–Z sortieren</button></div>
       <p class="muted">„Umbuchung" (z. B. aufs Sparkonto) zählt weder als Einnahme noch als Ausgabe.</p></div>
     <div class="catgrid">${cards}</div>
     ${hidden.length ? `<div class="card" style="margin-top:16px"><h2>Für „${esc(accById(S.acc)?.name)}" ausgeblendet (${hidden.length})</h2>
@@ -529,7 +534,7 @@ async function submitNewDialog() {
     if (error) throw error;
     S.subs.push(data);
   }
-  S.subs.sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  sortSubs();
   const sub = S.subs.find(s => s.category_id === catId && s.name.toLowerCase() === subName.toLowerCase());
   const txId = ndTxId;
   $('#newDlg').close(); ndTxId = null;
@@ -539,6 +544,27 @@ async function submitNewDialog() {
 $('#newForm').addEventListener('submit', e => { e.preventDefault(); submitNewDialog().catch(fail); });
 $('#ndCancel').onclick = closeNewDialog;
 $('#newDlg').addEventListener('cancel', e => { e.preventDefault(); closeNewDialog(); });
+
+// ---------- Reihenfolge der Kategorien ----------
+async function saveCatOrder() {
+  const changed = S.cats.map((c, i) => [c, i]).filter(([c, i]) => c.sort !== i);
+  for (const [c, i] of changed) {
+    const { error } = await sb.from('categories').update({ sort: i }).eq('id', c.id);
+    if (error) throw error;
+    c.sort = i;
+  }
+}
+async function moveCat(id, dir) {
+  const i = S.cats.findIndex(c => c.id === id), j = i + dir;
+  if (j < 0 || j >= S.cats.length) return;
+  [S.cats[i], S.cats[j]] = [S.cats[j], S.cats[i]];
+  render(); await saveCatOrder();
+}
+async function sortCatsAZ() {
+  const order = { einnahme: 0, ausgabe: 1, umbuchung: 2 };
+  S.cats.sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name, 'de'));
+  render(); await saveCatOrder(); toast('Sortiert: Einnahmen, Ausgaben, Umbuchungen – jeweils A–Z');
+}
 
 // ---------- Auswahl-Dialog mit mehreren Knöpfen ----------
 // buttons: [{ value, label, primary }]; Rückgabe: gewählter value, oder null bei Abbrechen/Esc
@@ -842,13 +868,13 @@ document.addEventListener('click', guard(async e => {
     if (error) throw error;
     const s = await sb.from('subcategories').insert({ category_id: data.id, name: 'Sonstiges' }).select().single();
     if (s.error) throw s.error;
-    S.cats.push(data); S.subs.push(s.data); return render();
+    S.cats.push(data); S.subs.push(s.data); sortSubs(); return render();
   }
   if (d.addsub) {
     const name = prompt('Name der Unterkategorie'); if (!name?.trim()) return;
     const { data, error } = await sb.from('subcategories').insert({ category_id: d.addsub, name: name.trim() }).select().single();
     if (error) throw error;
-    S.subs.push(data); return render();
+    S.subs.push(data); sortSubs(); return render();
   }
   if (d.rensub) return openSubDialog(d.rensub);
   if (d.rencat || d.rensub) {
@@ -894,6 +920,8 @@ document.addEventListener('click', guard(async e => {
     await loadAll(); return render();
   }
   if (b.id === 'addUserRule') return openRuleDialog();
+  if (d.catmove) { const [id, dir] = d.catmove.split('|'); return moveCat(id, +dir); }
+  if (b.id === 'sortAZ') return sortCatsAZ();
   if (d.editrule) return openRuleDialog(S.userRules.find(r => r.id === d.editrule));
   if (d.deluserrule) {
     if (!confirm('Regel löschen? Bereits zugeordnete Buchungen bleiben zugeordnet.')) return;
