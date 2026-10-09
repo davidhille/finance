@@ -11,11 +11,11 @@
 In `config.js` URL und Anon-Key eintragen. Der Anon-Key ist öffentlich gedacht; geschützt wird über Login + Row Level Security.
 
 ## 3. GitHub Pages
-1. Neues GitHub-Repo `finance-app` anlegen (im Gratis-Tarif muss es **öffentlich** sein, damit Pages läuft).
+1. GitHub-Repo `finance` (im Gratis-Tarif muss es **öffentlich** sein, damit Pages läuft).
    Öffentlich ist nur der Code – deine Buchungen liegen in Supabase hinter Login + RLS.
-2. Inhalt von `finance-app` pushen.
+2. Code pushen.
 3. Repo → *Settings* → *Pages* → *Deploy from a branch* → `main` / `/ (root)` → *Save*.
-4. Nach ca. 1 Minute erreichbar unter `https://<dein-github-name>.github.io/finance-app/`.
+4. Nach ca. 1 Minute erreichbar unter `https://davidhille.github.io/finance/`.
    Ab dann: `git push` auf `main` = Deploy.
 5. Supabase → *Authentication* → *URL Configuration*: diese Adresse als *Site URL* eintragen.
 
