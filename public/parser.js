@@ -132,6 +132,6 @@
     return { rows, skippedPending };
   }
 
-  const api = { decode, parseDKB, matchKey, normKey, keyFor, prettyPayee, displayName, isProcessor, parseAmount, parseDate };
+  const api = { decode, parseDKB, fold, matchKey, normKey, keyFor, prettyPayee, displayName, isProcessor, parseAmount, parseDate };
   if (typeof module !== 'undefined') module.exports = api; else root.FinParser = api;
 })(this);

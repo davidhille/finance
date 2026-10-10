@@ -133,17 +133,20 @@ async function seedDefaults() {
 }
 
 // Eigene Regeln: "enthält"-Bedingung, haben Vorrang
+// Vergleichstext: klein, ä=ae, Satzzeichen egal ("SV.HEIMSTETTEN" = "SV Heimstetten")
+const soft = v => P.fold(v || '').replace(/[^a-z0-9]+/g, ' ').trim();
 function ruleMatches(r, t) {
   if (r.account_id && t.account_id && r.account_id !== t.account_id) return false;
   if (r.direction === 'ausgabe' && t.amount >= 0) return false;
   if (r.direction === 'einnahme' && t.amount < 0) return false;
-  const who = `${t.counterparty_raw || ''} ${t.payee || ''}`.toLowerCase(), why = (t.purpose || '').toLowerCase();
-  if (!r.pattern && !r.purpose_pattern) return false;
-  if (r.pattern) {
-    const hay = r.field === 'empfaenger' ? who : r.field === 'zweck' ? why : who + ' ' + why;
-    if (!hay.includes(r.pattern.toLowerCase())) return false;
+  const who = ' ' + soft(`${t.counterparty_raw || ''} ${t.payee || ''}`) + ' ', why = ' ' + soft(t.purpose) + ' ';
+  const pat = soft(r.pattern), pp = soft(r.purpose_pattern);
+  if (!pat && !pp) return false;
+  if (pat) {
+    const hay = r.field === 'empfaenger' ? who : r.field === 'zweck' ? why : who + why;
+    if (!hay.includes(pat)) return false;
   }
-  if (r.purpose_pattern && !why.includes(r.purpose_pattern.toLowerCase())) return false;
+  if (pp && !why.includes(pp)) return false;
   return true;
 }
 const findUserRule = t => S.userRules.find(r => ruleMatches(r, t));
@@ -625,7 +628,7 @@ function viewCats() {
         <button class="icon" data-trend="sub:${s.id}" title="Verlauf" aria-label="Verlauf">${IC_TREND}</button><button class="icon" data-rensub="${s.id}" title="Bearbeiten / verschieben">✎</button><button class="icon" data-delsub="${s.id}" title="Löschen">×</button></div>`).join('')}</div>
       <button class="ghost addsub" data-addsub="${c.id}">+ Unterkategorie</button></div>`).join('');
   const rules = [...S.rules.values()].filter(r => r.subcategory_id).sort((a, b) => a.match_key.localeCompare(b.match_key));
-  const anchors = `<div class="filters" style="margin-bottom:12px">${[['s-konten', 'Konten'], ['s-kat', 'Kategorien'], ['s-regeln', 'Regeln'], ['s-daten', 'Daten & Backup']].map(([id, l]) => `<button class="ghost" data-jump="${id}">${l}</button>`).join('')}</div>`;
+  const anchors = `<div class="filters" style="margin-bottom:12px">${[['s-konten', 'Konten'], ['s-kat', 'Kategorien'], ['s-regeln', 'Eigene Regeln'], ['s-gelernt', 'Gelernte Regeln'], ['s-daten', 'Daten & Backup']].map(([id, l]) => `<button class="ghost" data-jump="${id}">${l}</button>`).join('')}</div>`;
   const accCard = anchors + `<div class="card" id="s-konten"><div class="filters"><h2 style="margin:0">Konten</h2>
       ${S.accounts.map(a => `<span class="chip">${esc(a.name)} <span class="muted">(${S.txs.filter(t => t.account_id === a.id).length})</span><button class="icon" data-renacc="${a.id}">✎</button><button class="icon" data-delacc="${a.id}">×</button></span>`).join('')}
       <button class="ghost" id="addAcc">+ Konto</button></div></div>`;
@@ -640,13 +643,7 @@ function viewCats() {
       <p class="muted" style="margin-top:-6px">Diese Kategorien gelten nur für ein anderes Konto. Zum Einblenden auf „alle Konten" oder dieses Konto stellen.</p>
       <div class="filters">${hidden.map(c => `<span class="chip" style="padding-right:6px">${esc(c.name)} ${scopeSel(c)}</span>`).join('')}</div></div>` : ''}
     <div id="s-regeln">${viewUserRules()}</div>
-    <div class="card" style="margin-top:16px"><h2>Gelernte Regeln (${rules.length})</h2>
-      <p class="muted">Entstehen automatisch, wenn du eine Buchung zuordnest. Löschen = App vergisst diese Zuordnung.</p>
-      ${rules.length ? `<div class="tablewrap"><table><thead><tr><th>Erkennung</th><th>Anzeigename</th><th>Kategorie</th><th class="num">Treffer</th><th></th></tr></thead><tbody>
-      ${rules.map(r => { const s = subById(r.subcategory_id); return `<tr><td class="num" style="text-align:left">${esc(r.match_key)}</td><td>${esc(r.payee || '')}</td>
-        <td>${s ? esc(catById(s.category_id)?.name + ' › ' + s.name) : '<span class="muted">–</span>'}</td><td class="num">${r.hits}</td>
-        <td><button class="icon" data-delrule="${r.id}">×</button></td></tr>`; }).join('')}</tbody></table></div>` : ''}
-    </div>
+    ${viewLearned(rules)}
     ${viewData()}`;
 }
 
@@ -891,6 +888,7 @@ async function submitRuleDialog() {
     S.userRules.push(data);
   }
   $('#ruleDlg').close(); ruId = null;
+  if (ruConvert) { await learnedDelete([ruConvert]); ruConvert = null; }
   // Auf vorhandene Buchungen anwenden: Name bei allen Treffern, Kategorie bei nicht manuellen (oder auf Wunsch allen)
   const incManual = $('#ruManual').checked;
   const all = S.txs.filter(t => ruleMatches(r, t));
@@ -903,7 +901,7 @@ async function submitRuleDialog() {
   render();
 }
 $('#ruleForm').addEventListener('submit', e => { e.preventDefault(); submitRuleDialog().catch(fail); });
-$('#ruCancel').onclick = () => { $('#ruleDlg').close(); ruId = null; };
+$('#ruCancel').onclick = () => { $('#ruleDlg').close(); ruId = null; ruConvert = null; };
 ['ruPattern', 'ruPurpose', 'ruDir', 'ruAcc', 'ruManual', 'ruPayee'].forEach(id => $('#' + id).addEventListener('input', updateRulePreview));
 $('#edRule').onclick = () => {
   const t = S.txs.find(x => x.id === edId); if (!t) return;
@@ -912,6 +910,95 @@ $('#edRule').onclick = () => {
   openRuleDialog(null, { field: party ? 'empfaenger' : 'zweck', pattern: party || P.displayName(t.counterparty_raw, t.purpose).replace(/^PayPal$/, ''), subcategory_id: t.subcategory_id,
     direction: t.amount < 0 ? 'ausgabe' : 'einnahme' });
 };
+
+// ---------- Gelernte Regeln verwalten ----------
+Object.assign(S, { lq: '', lcat: '', lsort: 'az', llimit: 100, lsel: new Set() });
+let ruConvert = null;
+function learnedTxMap() {
+  const m = new Map();
+  for (const t of S.txs) { const k = keyOf(t); if (!k) continue; if (!m.has(k)) m.set(k, []); m.get(k).push(t); }
+  return m;
+}
+function viewLearned(rules) {
+  const txm = learnedTxMap(), q = soft(S.lq);
+  let list = rules.slice();
+  if (S.lcat === 'none') list = list.filter(r => !r.subcategory_id);
+  else if (S.lcat) list = list.filter(r => S.lcat.startsWith('sub:') ? r.subcategory_id === S.lcat.slice(4) : subById(r.subcategory_id)?.category_id === S.lcat);
+  if (q) list = list.filter(r => soft(`${r.match_key} ${r.payee || ''} ${(txm.get(r.match_key) || []).map(t => t.counterparty_raw).slice(0, 3).join(' ')}`).includes(q));
+  const n = r => (txm.get(r.match_key) || []).length;
+  const catName = r => { const s = subById(r.subcategory_id); return s ? catById(s.category_id)?.name + ' › ' + s.name : '~'; };
+  list.sort(S.lsort === 'n' ? (a, b) => n(b) - n(a) || a.match_key.localeCompare(b.match_key)
+    : S.lsort === 'cat' ? (a, b) => catName(a).localeCompare(catName(b), 'de') || a.match_key.localeCompare(b.match_key)
+    : S.lsort === 'new' ? (a, b) => (b.updated_at || '').localeCompare(a.updated_at || '')
+    : (a, b) => a.match_key.localeCompare(b.match_key));
+  const shown = list.slice(0, S.llimit);
+  const catOpts = `<option value="">Alle Kategorien</option><option value="none"${S.lcat === 'none' ? ' selected' : ''}>– ohne Kategorie –</option>` + S.cats.map(c => `<option value="${c.id}"${S.lcat === c.id ? ' selected' : ''}>${esc(c.name)}</option>` +
+    S.subs.filter(x => x.category_id === c.id).map(x => `<option value="sub:${x.id}"${S.lcat === 'sub:' + x.id ? ' selected' : ''}>&nbsp;&nbsp;› ${esc(x.name)}</option>`).join('')).join('');
+  const rows = shown.map(r => { const c = n(r), raw = (txm.get(r.match_key) || [])[0]?.counterparty_raw; return `<tr>
+    <td class="c-sel"><input type="checkbox" data-lsel="${r.id}"${S.lsel.has(r.id) ? ' checked' : ''}></td>
+    <td><span title="${esc(raw ? 'z. B. „' + raw + '"' : '')}">${esc(r.match_key)}</span></td>
+    <td><input class="payee" data-lpayee="${r.id}" value="${esc(r.payee || '')}" placeholder="(Name aus Bank)"></td>
+    <td><select data-lsub="${r.id}">${subOptions(r.subcategory_id, false).replace('– offen –', '– keine (nur Name) –')}</select></td>
+    <td class="num">${c ? `<button class="linkbtn" data-ltx="${esc(r.match_key)}">${c}</button>` : '<span class="muted">0</span>'}</td>
+    <td style="white-space:nowrap"><button class="icon" data-lconv="${r.id}" title="In eigene Regel umwandeln (Erkennung anpassen)">⚙</button><button class="icon" data-delrule="${r.id}" title="Löschen">×</button></td></tr>`; }).join('');
+  return `<div class="card" id="s-gelernt" style="margin-top:16px"><div class="filters"><h2 style="margin:0">Gelernte Regeln (${rules.length})</h2>
+      <input id="lQ" placeholder="Suchen…" value="${esc(S.lq)}" style="min-width:180px">
+      <select id="lCat">${catOpts}</select>
+      <select id="lSort"><option value="az"${S.lsort === 'az' ? ' selected' : ''}>A–Z</option><option value="n"${S.lsort === 'n' ? ' selected' : ''}>Meiste Buchungen</option><option value="cat"${S.lsort === 'cat' ? ' selected' : ''}>Nach Kategorie</option><option value="new"${S.lsort === 'new' ? ' selected' : ''}>Zuletzt geändert</option></select>
+      <span class="spacer" style="flex:1"></span>${S.lsel.size ? `<button class="ghost" id="lDel">${S.lsel.size} löschen</button>` : ''}</div>
+    <p class="muted" style="margin-top:-4px">Entstehen automatisch beim Zuordnen. Name und Kategorie hier direkt ändern – gilt für künftige Importe und auf Wunsch für die vorhandenen Buchungen.
+      Soll die <b>Erkennung</b> anders sein (z. B. nur bei bestimmtem Verwendungszweck), mit ⚙ in eine eigene Regel umwandeln.</p>
+    ${rows ? `<div class="tablewrap"><table><thead><tr><th class="c-sel"><input type="checkbox" id="lSelAll" title="Alle angezeigten"></th><th>Erkennung</th><th>Anzeigename</th><th>Kategorie</th><th class="num">Buchungen</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${list.length > shown.length ? `<p><button class="ghost" id="lMore">Weitere ${Math.min(100, list.length - shown.length)} von ${list.length - shown.length} anzeigen</button></p>` : `<p class="muted" style="margin-bottom:0">${list.length} angezeigt</p>`}`
+      : '<p class="muted">Keine passenden Regeln.</p>'}</div>`;
+}
+const ruleById = id => [...S.rules.values()].find(r => r.id === id);
+async function learnedSetPayee(id, val) {
+  const r = ruleById(id), name = val.trim() || null, old = r.payee;
+  if (name === (old || null)) return;
+  const { error } = await sb.from('rules').update({ payee: name, updated_at: new Date().toISOString() }).eq('id', id);
+  if (error) throw error;
+  r.payee = name;
+  const hit = name ? S.txs.filter(t => keyOf(t) === r.match_key && (t.payee === old || t.payee === P.displayName(t.counterparty_raw, t.purpose))) : [];
+  await updateTxs(hit.filter(t => t.payee !== name).map(t => t.id), { payee: name });
+  toast(name ? `Name „${name}"${hit.length ? ` – ${hit.length} Buchung(en) umbenannt` : ''}` : 'Name entfernt');
+  render();
+}
+async function learnedSetSub(id, sub) {
+  const r = ruleById(id); sub = sub || null;
+  const mine = S.txs.filter(t => keyOf(t) === r.match_key && !findUserRule(t) && (!sub || subAllowed(sub, t.account_id)));
+  const auto = mine.filter(t => t.assign_state !== 'manuell'), man = mine.filter(t => t.assign_state === 'manuell' && t.subcategory_id !== sub);
+  let scope = 'auto';
+  if (man.length) {
+    const s2 = subById(sub), label = s2 ? `${catById(s2.category_id)?.name} › ${s2.name}` : '– keine –';
+    scope = await askChoice(`Kategorie für „${r.payee || r.match_key}" ändern?`,
+      `Neue Kategorie: ${label}\n\n${man.length} Buchung(en) dieses Empfängers sind manuell zugeordnet${auto.length ? `, ${auto.length} automatisch` : ''}.`,
+      [{ value: 'auto', label: auto.length ? `Nur automatische (${auto.length}) + künftige` : 'Nur künftige Importe' }, { value: 'all', label: `Alle ${mine.length} Buchungen`, primary: true }]);
+    if (!scope) return keepScroll(render);
+  }
+  const { error } = await sb.from('rules').update({ subcategory_id: sub, updated_at: new Date().toISOString() }).eq('id', id);
+  if (error) throw error;
+  r.subcategory_id = sub;
+  const ok = scope === 'all' ? mine : auto;
+  await updateTxs(ok.map(t => t.id), sub ? { subcategory_id: sub, assign_state: scope === 'all' ? 'manuell' : 'auto' } : { subcategory_id: null, assign_state: null });
+  toast(`Kategorie geändert – ${ok.length} Buchung(en) angepasst`);
+  keepScroll(render);
+}
+async function learnedDelete(ids) {
+  for (let i = 0; i < ids.length; i += 200) {
+    const { error } = await sb.from('rules').delete().in('id', ids.slice(i, i + 200));
+    if (error) throw error;
+  }
+  for (const [k, r] of S.rules) if (ids.includes(r.id)) S.rules.delete(k);
+  ids.forEach(id => S.lsel.delete(id));
+}
+function learnedConvert(id) {
+  const r = ruleById(id), ex = S.txs.find(t => keyOf(t) === r.match_key);
+  const party = ex ? (P.isProcessor(ex.counterparty_raw) ? '' : (ex.counterparty_raw || '').split('/')[0].trim()) : r.match_key;
+  ruConvert = id;
+  openRuleDialog(null, { field: 'empfaenger', pattern: party || r.match_key, subcategory_id: r.subcategory_id, payee: r.payee || '', direction: 'beide' });
+  $('#ruTitle').textContent = 'Gelernte Regel → eigene Regel';
+}
 
 // ---------- Buchung bearbeiten ----------
 let edId = null;
@@ -1341,6 +1428,9 @@ async function saveBudget(id, val) {
 // ---------- App installierbar (PWA) ----------
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
+// Neu zeichnen, ohne dass die Seite nach oben springt
+function keepScroll(fn) { const y = window.scrollY; fn(); window.scrollTo(0, y); }
+
 // ---------- Render & Events ----------
 function render() {
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
@@ -1415,6 +1505,12 @@ document.addEventListener('change', guard(async e => {
   if (t.id === 'fxEnded') { S.showEnded = t.checked; return render(); }
   if (t.dataset.psel !== undefined) { t.checked ? S.psel.add(t.dataset.psel) : S.psel.delete(t.dataset.psel); return renderPayeeBar(); }
   if (t.id === 'pCat') { S.pcat = t.value; return render(); }
+  if (t.dataset.lpayee) return learnedSetPayee(t.dataset.lpayee, t.value);
+  if (t.dataset.lsub) return learnedSetSub(t.dataset.lsub, t.value);
+  if (t.dataset.lsel) { t.checked ? S.lsel.add(t.dataset.lsel) : S.lsel.delete(t.dataset.lsel); return keepScroll(render); }
+  if (t.id === 'lSelAll') { document.querySelectorAll('[data-lsel]').forEach(cb => t.checked ? S.lsel.add(cb.dataset.lsel) : S.lsel.delete(cb.dataset.lsel)); return keepScroll(render); }
+  if (t.id === 'lCat') { S.lcat = t.value; S.llimit = 100; return keepScroll(render); }
+  if (t.id === 'lSort') { S.lsort = t.value; return keepScroll(render); }
   if (t.id === 'ySel') { S.yearSel = +t.value; return render(); }
   if (t.id === 'cmpYtd') { S.cmpYtd = t.checked; return render(); }
   if (t.id === 'accSel') { S.acc = t.value; S.sel.clear(); try { localStorage.setItem('fin_acc', S.acc); } catch {} return render(); }
@@ -1423,12 +1519,17 @@ document.addEventListener('change', guard(async e => {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.id === 'pMergeName') { e.preventDefault(); mergePayees([...S.psel], e.target.value).catch(fail); }
-  if (e.key === 'Enter' && (e.target.dataset.payee || e.target.dataset.budget)) { e.preventDefault(); e.target.blur(); }
+  if (e.key === 'Enter' && (e.target.dataset.payee || e.target.dataset.budget || e.target.dataset.lpayee)) { e.preventDefault(); e.target.blur(); }
   if (e.key === 'Enter' && e.target.id === 'bulkTag') { e.preventDefault(); bulkTag().catch(fail); }
 });
 
 let qTimer;
 document.addEventListener('input', e => {
+  if (e.target.id === 'lQ') {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => { S.lq = e.target.value; S.llimit = 100; keepScroll(render); const q = $('#lQ'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 250);
+    return;
+  }
   if (e.target.id === 'pQ') {
     clearTimeout(qTimer);
     qTimer = setTimeout(() => { S.pq = e.target.value; render(); const q = $('#pQ'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 250);
@@ -1565,12 +1666,15 @@ document.addEventListener('click', guard(async e => {
     if (error) throw error;
     S.userRules = S.userRules.filter(r => r.id !== d.deluserrule); return render();
   }
-  if (d.delrule) {
-    const { error } = await sb.from('rules').delete().eq('id', d.delrule);
-    if (error) throw error;
-    for (const [k, r] of S.rules) if (r.id === d.delrule) S.rules.delete(k);
-    return render();
+  if (d.delrule) { await learnedDelete([d.delrule]); return keepScroll(render); }
+  if (b.id === 'lDel') {
+    const ids = [...S.lsel];
+    if (!confirm(`${ids.length} gelernte Regel(n) löschen?\n\nBereits zugeordnete Buchungen bleiben zugeordnet; künftige Importe dieser Empfänger landen wieder bei „offen".`)) return;
+    await learnedDelete(ids); toast(`${ids.length} Regel(n) gelöscht`); return keepScroll(render);
   }
+  if (b.id === 'lMore') { S.llimit += 100; return keepScroll(render); }
+  if (d.lconv) return learnedConvert(d.lconv);
+  if (d.ltx) { const ids = S.txs.filter(t => keyOf(t) === d.ltx).map(t => t.id); return go('tx', { f: { ids, idsLabel: `Regel: ${d.ltx}` }, from: fromLabel() }); }
 }));
 
 // ---------- Start ----------
