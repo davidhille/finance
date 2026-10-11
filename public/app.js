@@ -407,8 +407,37 @@ function filteredTxs() {
   });
 }
 
+// ---------- Sortierung der Buchungsliste ----------
+S.tsort = (() => { try { return JSON.parse(localStorage.getItem('fin_tsort')) || { k: 'date', dir: -1 }; } catch { return { k: 'date', dir: -1 }; } })();
+const TSORT = {
+  date: ['Datum', t => t.booking_date],
+  acc: ['Konto', t => accById(t.account_id)?.name || ''],
+  payee: ['Empfänger', t => (t.payee || t.counterparty_raw || '').toLowerCase()],
+  purpose: ['Verwendungszweck', t => (t.purpose || '').toLowerCase()],
+  amount: ['Betrag', t => t.amount],
+  cat: ['Kategorie', t => { const s = t.assign_state !== 'vorschlag' ? subById(t.subcategory_id) : null; return s ? (catById(s.category_id)?.name + ' › ' + s.name).toLowerCase() : '\uffff'; }],
+  state: ['Status', t => !t.subcategory_id ? 0 : t.assign_state === 'vorschlag' ? 1 : t.assign_state === 'auto' ? 2 : 3],
+};
+function sortTx(list) {
+  const [, get] = TSORT[S.tsort.k] || TSORT.date, dir = S.tsort.dir;
+  return list.map(t => [get(t), t]).sort((a, b) => {
+    const x = a[0], y = b[0];
+    const c = typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'de');
+    return c * dir || b[1].booking_date.localeCompare(a[1].booking_date);
+  }).map(p => p[1]);
+}
+function setSort(k) {
+  S.tsort = S.tsort.k === k ? { k, dir: -S.tsort.dir } : { k, dir: k === 'date' || k === 'amount' ? -1 : 1 };
+  try { localStorage.setItem('fin_tsort', JSON.stringify(S.tsort)); } catch {}
+  keepScroll(render);
+}
+const th = (k, label, cls = '') => {
+  const on = S.tsort.k === k, arrow = on ? (S.tsort.dir > 0 ? '▲' : '▼') : '';
+  return `<th class="sortable${cls ? ' ' + cls : ''}${on ? ' on' : ''}" data-tsort="${k}" title="Nach ${TSORT[k][0]} sortieren${k === 'amount' ? ' (▲ größte Ausgaben zuerst, ▼ größte Einnahmen zuerst)' : ''}" aria-sort="${on ? (S.tsort.dir > 0 ? 'ascending' : 'descending') : 'none'}">${label}<span class="arr">${arrow}</span></th>`;
+};
+
 function viewTx() {
-  const list = filteredTxs().sort((a, b) => b.booking_date.localeCompare(a.booking_date));
+  const list = sortTx(filteredTxs());
   const sum = list.reduce((a, t) => a + t.amount, 0);
   const rows = list.slice(0, 600).map(t => {
     const st = !t.subcategory_id ? '<span class="state offen">offen</span>'
@@ -443,10 +472,12 @@ function viewTx() {
     </div>
     <div class="listhead"><span class="muted">${list.length} Buchungen · Summe <b class="num ${sign(sum)}">${eur(sum)}</b></span>
       <span class="spacer" style="flex:1"></span>
+      <select id="tSortSel" class="sortsel" aria-label="Sortierung">${Object.entries(TSORT).filter(([k]) => k !== 'acc' || S.acc === 'alle').flatMap(([k, [l]]) =>
+        [1, -1].map(d => `<option value="${k}|${d}"${S.tsort.k === k && S.tsort.dir === d ? ' selected' : ''}>${l} ${k === 'date' ? (d > 0 ? 'alt → neu' : 'neu → alt') : k === 'amount' ? (d > 0 ? 'größte Ausgaben zuerst' : 'größte Einnahmen zuerst') : d > 0 ? 'A–Z' : 'Z–A'}</option>`)).join('')}</select>
       <button class="ghost small" data-view="payees" title="Alle Empfänger mit Summen, Schreibweisen zusammenfassen">Empfänger</button>
       <button class="ghost small" id="csvFiltered" title="Diese Liste als CSV (Excel) herunterladen"${list.length ? '' : ' disabled'}>⬇ CSV</button></div>
     ${list.length ? `<div class="tablewrap"><table class="txt">
-      <thead><tr><th class="c-sel"><input type="checkbox" id="selAll" title="Alle sichtbaren auswählen"></th><th>Datum</th>${S.acc === 'alle' ? '<th>Konto</th>' : ''}<th>Empfänger / Auftraggeber</th><th>Verwendungszweck</th><th class="num">Betrag</th><th>Kategorie</th><th></th><th></th></tr></thead>
+      <thead><tr><th class="c-sel"><input type="checkbox" id="selAll" title="Alle sichtbaren auswählen"></th>${th('date', 'Datum')}${S.acc === 'alle' ? th('acc', 'Konto') : ''}${th('payee', 'Empfänger / Auftraggeber')}${th('purpose', 'Verwendungszweck')}${th('amount', 'Betrag', 'num')}${th('cat', 'Kategorie')}${th('state', 'Status')}<th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>${list.length > 600 ? '<p class="muted">Die ersten 600 werden angezeigt – Filter eingrenzen.</p>' : ''}`
       : `<p class="muted">${S.f.cat === 'offen' ? 'Alles zugeordnet. 👌' : 'Keine Buchungen für diesen Filter.'}</p>`}
   </div>`;
@@ -1530,6 +1561,7 @@ document.addEventListener('change', guard(async e => {
   if (t.id === 'fMonth') { S.f.month = t.value; S.sel.clear(); return render(); }
   if (t.id === 'fCat') { S.f.cat = t.value; S.f.sub = ''; S.sel.clear(); return render(); }
   if (t.id === 'fSub') { S.f.sub = t.value; return render(); }
+  if (t.id === 'tSortSel') { const [k, d] = t.value.split('|'); S.tsort = { k, dir: +d }; try { localStorage.setItem('fin_tsort', JSON.stringify(S.tsort)); } catch {} return keepScroll(render); }
   if (t.id === 'fTag') { S.f.tag = t.value; S.sel.clear(); return render(); }
   if (t.dataset.selid) { t.checked ? S.sel.add(t.dataset.selid) : S.sel.delete(t.dataset.selid); return renderBulk(); }
   if (t.id === 'selAll') { document.querySelectorAll('[data-selid]').forEach(cb => { cb.checked = t.checked; t.checked ? S.sel.add(cb.dataset.selid) : S.sel.delete(cb.dataset.selid); }); return renderBulk(); }
@@ -1573,6 +1605,8 @@ document.addEventListener('input', e => {
 });
 
 document.addEventListener('click', guard(async e => {
+  const ts = e.target.closest('th[data-tsort]');
+  if (ts) return setSort(ts.dataset.tsort);
   const dr = e.target.closest('td[data-drill]');
   if (dr) {
     const [key, m] = dr.dataset.drill.split('|');

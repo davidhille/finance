@@ -141,6 +141,12 @@ nav button{white-space:nowrap}
 button.btn.small{padding:6px 12px}
 button.ghost.small{padding:4px 10px;font-size:13px}
 .listhead{display:flex;align-items:center;gap:8px;margin:-4px 0 8px}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--ink)}
+th.sortable.on{color:var(--accent)}
+th.sortable .arr{display:inline-block;width:12px;margin-left:3px;font-size:9px}
+select.sortsel{font-size:13px;padding:4px 6px}
+@media (min-width:721px){ select.sortsel{display:none} }
 #logout{font-size:16px}
 /* Zurück-Leiste */
 .backbar{display:flex;align-items:center;gap:8px;margin:-4px 0 12px}
