@@ -393,7 +393,11 @@ function normFilter() {
 function filteredTxs() {
   normFilter();
   const { year, month, cat, sub, tag, q, ids } = S.f;
-  const ql = (q || '').toLowerCase(), amt = ql.trim() ? amountMatcher(q) : null, idSet = ids ? new Set(ids) : null;
+  const ql = (q || '').toLowerCase().trim(), amt = ql ? amountMatcher(q) : null, idSet = ids ? new Set(ids) : null;
+  // Reine Zahl (z. B. "9286" oder "36,73"): Betrag ODER Text (Verwendungszweck, Empfänger …) – beides zählt
+  const plainNum = amt && /^[+-]?\s*[\d.,]+$/.test(ql);
+  const variants = plainNum ? [...new Set([ql.replace(/^[+-]\s*/, ''), ql.replace(/^[+-]\s*/, '').replace(',', '.'), ql.replace(/^[+-]\s*/, '').replace('.', ',')])] : [ql];
+  const txt = t => `${t.payee} ${t.purpose} ${t.counterparty_raw} ${t.iban || ''} ${t.note || ''} ${(t.tags || []).join(' ')}`.toLowerCase();
   return scoped().filter(t => {
     if (idSet && !idSet.has(t.id)) return false;
     if (tag && !(t.tags || []).includes(tag)) return false;
@@ -402,7 +406,7 @@ function filteredTxs() {
     if (cat === 'offen' && t.subcategory_id && t.assign_state !== 'vorschlag') return false;
     if (sub) { if (t.subcategory_id !== sub || t.assign_state === 'vorschlag') return false; }
     else if (cat !== 'alle' && cat !== 'offen' && catOfTx(t)?.id !== cat) return false;
-    if (ql && !(amt ? amt(t.amount) : `${t.payee} ${t.purpose} ${t.counterparty_raw} ${t.note || ''} ${(t.tags || []).join(' ')}`.toLowerCase().includes(ql))) return false;
+    if (ql && !(amt && amt(t.amount)) && !((!amt || plainNum) && variants.some(v => txt(t).includes(v)))) return false;
     return true;
   });
 }
@@ -486,7 +490,7 @@ function viewTx() {
       </select>
       ${catById(S.f.cat) ? `<select id="fSub"><option value="">Alle Unterkategorien</option>${S.subs.filter(x => x.category_id === S.f.cat && (catVisible(x, S.acc) || x.id === S.f.sub)).map(x => `<option value="${x.id}"${S.f.sub === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : ''}
       ${allTags().length ? `<select id="fTag"><option value="">Alle Tags</option>${allTags().map(g => `<option${S.f.tag === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}</select>` : ''}
-      <input id="fQ" placeholder="Text oder Betrag (36,73 · >100 · 50-100)" title="Text: Empfänger/Zweck · Betrag: 36,73 genau · 36 = 36,00–36,99 · -36,73 nur Ausgaben · >100 · <=20 · 50-100" style="min-width:240px" value="${esc(S.f.q)}">
+      <input id="fQ" placeholder="Text, Zahl oder Betrag (36,73 · >100 · 50-100)" title="Text/Zahl: sucht in Empfänger, Verwendungszweck, Notiz, Tags · Eine Zahl findet zusätzlich passende Beträge (36,73 genau · 36 = 36,00–36,99) · >100 · <=20 · 50-100 nur Beträge" style="min-width:240px" value="${esc(S.f.q)}">
       ${S.f.ids ? `<span class="chip">${esc(S.f.idsLabel || 'Auswahl')}<button class="icon" data-clearids title="Filter entfernen">×</button></span>` : ''}
     </div>
     <div class="listhead"><span class="muted">${list.length} Buchungen · Summe <b class="num ${sign(sum)}">${eur(sum)}</b></span>
