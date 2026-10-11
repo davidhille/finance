@@ -6,7 +6,7 @@ const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 const S = { fxEx: [], noFxEx: false, userRules: [], noUserRules: false, dupReview: [], accounts: [], acc: 'alle', cats: [], subs: [], txs: [], rules: new Map(), view: 'home',
   f: { year: 'alle', month: 'alle', cat: 'offen', sub: '', tag: '', q: '' }, yearSel: null, expanded: new Set(),
   sel: new Set(), from: null, homeMonth: null, showEnded: false };
-const F0 = { year: 'alle', month: 'alle', cat: 'alle', sub: '', tag: '', q: '', ids: null, idsLabel: '' };
+const F0 = { year: 'alle', month: 'alle', cat: 'alle', sub: '', tag: '', q: '', ids: null, idsLabel: '', batch: '' };
 
 const MONTHS = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
 const DEFAULTS = [
@@ -320,11 +320,25 @@ function importBatches() {
   return [...m.values()].filter(b => b.ids.length > 1 || m.size < 30).sort((a, b) => b.at.localeCompare(a.at));
 }
 const fmtAt = iso => new Date(iso).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+S.reviewed = new Set();
+const isReviewed = key => S.reviewed.has(key);
+async function markReviewed(key, on = true) {
+  on ? S.reviewed.add(key) : S.reviewed.delete(key);
+  const list = [...S.reviewed].slice(-200);
+  const { error } = await sb.auth.updateUser({ data: { reviewed_imports: list } });
+  if (error) { try { localStorage.setItem('fin_reviewed', JSON.stringify(list)); } catch {} }
+  toast(on ? 'Import als geprüft markiert' : 'Markierung entfernt');
+  keepScroll(render);
+}
+// Neuester noch nicht geprüfter Import der letzten 14 Tage
+const pendingBatch = () => importBatches().find(b => !isReviewed(b.key) && Date.now() - Date.parse(b.at) < 14 * 864e5);
+
 function viewBatches() {
   const list = importBatches().slice(0, 12); if (!list.length) return '';
-  return `<div class="card"><h2>Letzte Importe</h2><div class="tablewrap"><table><thead><tr><th>Importiert am</th><th>Konto</th><th>Zeitraum</th><th class="num">Buchungen</th><th class="num">offen</th><th></th></tr></thead><tbody>
+  return `<div class="card"><h2>Letzte Importe</h2><div class="tablewrap"><table><thead><tr><th>Importiert am</th><th>Konto</th><th>Zeitraum</th><th class="num">Buchungen</th><th class="num">offen</th><th>Status</th><th></th></tr></thead><tbody>
     ${list.map(b => `<tr><td>${fmtAt(b.at)} Uhr</td><td class="muted">${esc(accById(b.acc)?.name || '–')}</td><td class="muted">${fmtDate(b.from)} – ${fmtDate(b.to)}</td>
       <td class="num">${b.ids.length}</td><td class="num">${b.open ? `<span class="state offen">${b.open}</span>` : '<span class="muted">0</span>'}</td>
+      <td>${isReviewed(b.key) ? `<button class="tag t" data-unreview="${esc(b.key)}" title="Markierung entfernen">✓ geprüft</button>` : `<button class="ghost small" data-review="${esc(b.key)}">✓ als geprüft markieren</button>`}</td>
       <td style="text-align:right"><button class="ghost small" data-batch="${esc(b.key)}">ansehen</button></td></tr>`).join('')}</tbody></table></div></div>`;
 }
 
@@ -492,6 +506,7 @@ function viewTx() {
       ${allTags().length ? `<select id="fTag"><option value="">Alle Tags</option>${allTags().map(g => `<option${S.f.tag === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}</select>` : ''}
       <input id="fQ" placeholder="Text, Zahl oder Betrag (36,73 · >100 · 50-100)" title="Text/Zahl: sucht in Empfänger, Verwendungszweck, Notiz, Tags · Eine Zahl findet zusätzlich passende Beträge (36,73 genau · 36 = 36,00–36,99) · >100 · <=20 · 50-100 nur Beträge" style="min-width:240px" value="${esc(S.f.q)}">
       ${S.f.ids ? `<span class="chip">${esc(S.f.idsLabel || 'Auswahl')}<button class="icon" data-clearids title="Filter entfernen">×</button></span>` : ''}
+      ${S.f.batch ? (isReviewed(S.f.batch) ? '<span class="tag t">✓ geprüft</span>' : `<button class="btn small" data-review="${esc(S.f.batch)}">✓ Import als geprüft markieren</button>`) : ''}
     </div>
     <div class="listhead"><span class="muted">${list.length} Buchungen · Summe <b class="num ${sign(sum)}">${eur(sum)}</b></span>
       <span class="spacer" style="flex:1"></span>
@@ -1309,7 +1324,8 @@ function viewHome() {
   return `<div class="filters"><div class="monthnav"><button class="icon" data-hm="-1" title="Vormonat">◀</button><b>${ymLabel(ym)}</b><button class="icon" data-hm="1" title="Nächster Monat"${ym >= ymOf(latest) ? ' disabled' : ''}>▶</button></div>
       <span class="muted">${inMonth.length} Buchungen</span></div>
     ${open ? `<div class="callout"><span><b>${open}</b> Buchung(en) noch nicht zugeordnet.</span><button class="btn small" data-gotx="offen">Jetzt zuordnen</button></div>` : ''}
-    ${(() => { const b = importBatches()[0]; return b && Date.now() - Date.parse(b.at) < 3 * 864e5 ? `<div class="callout" style="background:var(--accent-soft);border-color:var(--accent)"><span>Letzter Import: <b>${b.ids.length}</b> Buchung(en) · ${esc(accById(b.acc)?.name || '')} · ${fmtAt(b.at)} Uhr</span><button class="ghost small" data-batch="${esc(b.key)}">Prüfen</button></div>` : ''; })()}
+    ${(() => { const b = pendingBatch(); return b ? `<div class="callout" style="background:var(--accent-soft);border-color:var(--accent)"><span>Ungeprüfter Import: <b>${b.ids.length}</b> Buchung(en) · ${esc(accById(b.acc)?.name || '')} · ${fmtAt(b.at)} Uhr</span>
+      <span class="filters" style="margin:0;flex-wrap:nowrap"><button class="ghost small" data-batch="${esc(b.key)}">Prüfen</button><button class="btn small" data-review="${esc(b.key)}" title="Banner ausblenden">✓ Erledigt</button></span></div>` : ''; })()}
     <div class="card"><div class="tiles" style="margin-top:0">${tile('Einnahmen', 'inc', true)}${tile('Ausgaben', 'exp', false)}${tile('Ergebnis', 'result', true, true)}${tile('Umbuchungen', 'umb', null)}</div></div>
     <div class="grid2">
       <div class="card"><div class="filters"><h2 style="margin:0">Ausgaben nach Kategorie</h2><span class="spacer" style="flex:1"></span>${budgetSum ? `<span class="muted">Budgets: ${eur(budgetSum)}/Monat</span>` : ''}</div>
@@ -1550,7 +1566,8 @@ function bindImport() {
       $('#importResult').innerHTML = msg + `<div class="filters" style="margin-top:12px">
         ${ids.length ? `<button class="btn" id="goNew">${ids.length} neue Buchung(en) prüfen</button>` : ''}
         ${open ? `<button class="ghost" id="goOpen">Nur offene (${open}) zuordnen</button>` : ''}</div>`;
-      if (ids.length) $('#goNew').onclick = () => go('tx', { f: { ids: S.lastImport.ids.slice(), idsLabel: `${S.lastImport.label} · ${S.lastImport.ids.length} neu` }, from: 'Zurück zum Import' });
+      const nb = S.txs.find(t => t.id === ids[0]); S.lastImport.batch = nb?.created_at ? nb.account_id + '|' + nb.created_at.slice(0, 16) : '';
+      if (ids.length) $('#goNew').onclick = () => go('tx', { f: { ids: S.lastImport.ids.slice(), batch: S.lastImport.batch, idsLabel: `${S.lastImport.label} · ${S.lastImport.ids.length} neu` }, from: 'Zurück zum Import' });
       if (open) $('#goOpen').onclick = () => go('tx', { f: { cat: 'offen' }, from: 'Zurück zum Import' });
     } catch (e) { $('#importResult').innerHTML = `<p class="neg">${esc(e.message)}</p>`; }
   };
@@ -1677,9 +1694,11 @@ document.addEventListener('click', guard(async e => {
   if (b.id === 'pClear') { S.psel.clear(); return render(); }
   if (d.prename) { const n = prompt('Neuer Name für alle Buchungen von „' + d.prename + '"', d.prename); return n && n.trim() !== d.prename ? mergePayees([d.prename], n) : null; }
   if (d.paytx) { const x = payeeStats(scoped()).find(x => x.name === d.paytx); return x && go('tx', { f: { ids: x.ids, idsLabel: `Empfänger: ${x.name}` }, from: fromLabel() }); }
+  if (d.review) return markReviewed(d.review, true);
+  if (d.unreview) return markReviewed(d.unreview, false);
   if (d.batch) {
     const b = importBatches().find(x => x.key === d.batch);
-    return b && go('tx', { f: { ids: b.ids, idsLabel: `Import ${fmtAt(b.at)} · ${accById(b.acc)?.name || ''} · ${b.ids.length}` }, from: fromLabel() });
+    return b && go('tx', { f: { ids: b.ids, batch: b.key, idsLabel: `Import ${fmtAt(b.at)} · ${accById(b.acc)?.name || ''} · ${b.ids.length}` }, from: fromLabel() });
   }
   if ('clearids' in d) { S.f.ids = null; S.f.idsLabel = ''; return render(); }
   if (b.id === 'csvFiltered') return exportCsv(filteredTxs(), `buchungen-${stamp()}.csv`);
@@ -1783,6 +1802,7 @@ async function start() {
     return;
   }
   const { data: { session } } = await sb.auth.getSession();
+  try { S.reviewed = new Set([...(session?.user?.user_metadata?.reviewed_imports || []), ...JSON.parse(localStorage.getItem('fin_reviewed') || '[]')]); } catch {}
   if (!session) { $('#login').classList.remove('hidden'); return; }
   $('#app').classList.remove('hidden');
   $('#view').innerHTML = '<p class="muted">Lade…</p>';
