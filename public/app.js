@@ -231,7 +231,9 @@ async function importFile(file, accountId) {
   }
   await loadAll();
   S.dupReview.push(...dups);
-  return { total: rows.length, fresh: fresh.length, dup: rows.length - fresh.length - dups.length, check: dups.length, auto, sugg,
+  const freshH = new Set(fresh.map(r => r.hash));
+  const newIds = S.txs.filter(t => freshH.has(t.hash)).map(t => t.id);
+  return { newIds, total: rows.length, fresh: fresh.length, dup: rows.length - fresh.length - dups.length, check: dups.length, auto, sugg,
     open: fresh.length - auto - sugg, skippedPending };
 }
 
@@ -301,7 +303,29 @@ function viewImport() {
       <p>CSV-Datei hierher ziehen oder</p>
       <label class="btn">Datei wählen<input type="file" id="file" accept=".csv,text/csv" hidden multiple></label>
       <p class="muted">Bereits importierte Buchungen werden erkannt und übersprungen. Vorgemerkte Umsätze werden erst übernommen, wenn sie gebucht sind.</p>
-    </div><div id="importResult"></div></div>${viewDupReview()}`;
+    </div><div id="importResult"></div></div>${viewDupReview()}${viewBatches()}`;
+}
+
+// Importe = Buchungen mit gleichem Konto und Import-Zeitpunkt (auf die Minute)
+function importBatches() {
+  const m = new Map();
+  for (const t of S.txs) {
+    if (!t.created_at) continue;
+    const k = t.account_id + '|' + t.created_at.slice(0, 16);
+    if (!m.has(k)) m.set(k, { key: k, acc: t.account_id, at: t.created_at, ids: [], open: 0, from: t.booking_date, to: t.booking_date });
+    const b = m.get(k); b.ids.push(t.id);
+    if (!t.subcategory_id || t.assign_state === 'vorschlag') b.open++;
+    if (t.booking_date < b.from) b.from = t.booking_date; if (t.booking_date > b.to) b.to = t.booking_date;
+  }
+  return [...m.values()].filter(b => b.ids.length > 1 || m.size < 30).sort((a, b) => b.at.localeCompare(a.at));
+}
+const fmtAt = iso => new Date(iso).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+function viewBatches() {
+  const list = importBatches().slice(0, 12); if (!list.length) return '';
+  return `<div class="card"><h2>Letzte Importe</h2><div class="tablewrap"><table><thead><tr><th>Importiert am</th><th>Konto</th><th>Zeitraum</th><th class="num">Buchungen</th><th class="num">offen</th><th></th></tr></thead><tbody>
+    ${list.map(b => `<tr><td>${fmtAt(b.at)} Uhr</td><td class="muted">${esc(accById(b.acc)?.name || '–')}</td><td class="muted">${fmtDate(b.from)} – ${fmtDate(b.to)}</td>
+      <td class="num">${b.ids.length}</td><td class="num">${b.open ? `<span class="state offen">${b.open}</span>` : '<span class="muted">0</span>'}</td>
+      <td style="text-align:right"><button class="ghost small" data-batch="${esc(b.key)}">ansehen</button></td></tr>`).join('')}</tbody></table></div></div>`;
 }
 
 function viewDupReview() {
@@ -326,6 +350,7 @@ async function resolveDups(idxs, doImport) {
     const { data, error } = await sb.from('transactions').insert(items.map(d => d.row)).select();
     if (error) throw error;
     S.txs.push(...data.map(t => ({ ...t, amount: +t.amount })));
+    if (S.lastImport) S.lastImport.ids.push(...data.map(t => t.id));
   }
   S.dupReview = S.dupReview.filter(d => !items.includes(d));
   toast(doImport ? `${items.length} importiert` : `${items.length} verworfen`);
@@ -1117,7 +1142,7 @@ window.addEventListener('hashchange', () => {
   }
 });
 const backBar = () => S.from ? `<div class="backbar"><button data-back>← ${esc(S.from)}</button></div>` : '';
-const FROM = { payees: 'Zurück zu Empfänger', home: 'Zurück zur Übersicht', year: () => `Zurück zur Jahresübersicht ${S.yearSel}`, cats: 'Zurück zu Einstellungen', fix: 'Zurück zu Fixkosten', compare: 'Zurück zum Vergleich' };
+const FROM = { import: 'Zurück zum Import', payees: 'Zurück zu Empfänger', home: 'Zurück zur Übersicht', year: () => `Zurück zur Jahresübersicht ${S.yearSel}`, cats: 'Zurück zu Einstellungen', fix: 'Zurück zu Fixkosten', compare: 'Zurück zum Vergleich' };
 const fromLabel = () => { const f = FROM[S.view]; return typeof f === 'function' ? f() : f || null; };
 
 // ---------- Tags ----------
@@ -1228,6 +1253,7 @@ function viewHome() {
   return `<div class="filters"><div class="monthnav"><button class="icon" data-hm="-1" title="Vormonat">◀</button><b>${ymLabel(ym)}</b><button class="icon" data-hm="1" title="Nächster Monat"${ym >= ymOf(latest) ? ' disabled' : ''}>▶</button></div>
       <span class="muted">${inMonth.length} Buchungen</span></div>
     ${open ? `<div class="callout"><span><b>${open}</b> Buchung(en) noch nicht zugeordnet.</span><button class="btn small" data-gotx="offen">Jetzt zuordnen</button></div>` : ''}
+    ${(() => { const b = importBatches()[0]; return b && Date.now() - Date.parse(b.at) < 3 * 864e5 ? `<div class="callout" style="background:var(--accent-soft);border-color:var(--accent)"><span>Letzter Import: <b>${b.ids.length}</b> Buchung(en) · ${esc(accById(b.acc)?.name || '')} · ${fmtAt(b.at)} Uhr</span><button class="ghost small" data-batch="${esc(b.key)}">Prüfen</button></div>` : ''; })()}
     <div class="card"><div class="tiles" style="margin-top:0">${tile('Einnahmen', 'inc', true)}${tile('Ausgaben', 'exp', false)}${tile('Ergebnis', 'result', true, true)}${tile('Umbuchungen', 'umb', null)}</div></div>
     <div class="grid2">
       <div class="card"><div class="filters"><h2 style="margin:0">Ausgaben nach Kategorie</h2><span class="spacer" style="flex:1"></span>${budgetSum ? `<span class="muted">Budgets: ${eur(budgetSum)}/Monat</span>` : ''}</div>
@@ -1453,17 +1479,23 @@ function bindImport() {
   const run = async files => {
     $('#importResult').innerHTML = '<p class="muted">Importiere…</p>';
     try {
-      let msg = '';
+      let msg = ''; const ids = [];
       for (const f of files) {
         const r = await importFile(f, $('#impAcc').value);
+        if (r.newIds) ids.push(...r.newIds);
         if (r.aborted) { msg += `<p class="muted">${esc(f.name)}: Import abgebrochen.</p>`; continue; }
         msg += `<div class="stats"><div><span class="muted">${esc(f.name)} → ${esc(accById($('#impAcc').value)?.name)}</span></div>
           <div><b>${r.fresh}</b>neu</div><div><b>${r.dup}</b>schon vorhanden</div>${r.check ? `<div><b class="neg">${r.check}</b>prüfen (s. unten)</div>` : ''}<div><b>${r.auto}</b>automatisch zugeordnet</div>
           <div><b>${r.sugg}</b>Vorschläge</div><div><b>${r.open}</b>offen</div>${r.skippedPending ? `<div><b>${r.skippedPending}</b>vorgemerkt (übersprungen)</div>` : ''}</div>`;
       }
+      S.lastImport = { ids, label: `Import ${new Date().toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` };
       render();
-      $('#importResult').innerHTML = msg + `<p><button class="btn" id="goOpen">Offene Buchungen zuordnen</button></p>`;
-      $('#goOpen').onclick = () => go('tx', { f: { cat: 'offen' }, from: 'Zurück zum Import' });
+      const open = S.txs.filter(t => ids.includes(t.id) && (!t.subcategory_id || t.assign_state === 'vorschlag')).length;
+      $('#importResult').innerHTML = msg + `<div class="filters" style="margin-top:12px">
+        ${ids.length ? `<button class="btn" id="goNew">${ids.length} neue Buchung(en) prüfen</button>` : ''}
+        ${open ? `<button class="ghost" id="goOpen">Nur offene (${open}) zuordnen</button>` : ''}</div>`;
+      if (ids.length) $('#goNew').onclick = () => go('tx', { f: { ids: S.lastImport.ids.slice(), idsLabel: `${S.lastImport.label} · ${S.lastImport.ids.length} neu` }, from: 'Zurück zum Import' });
+      if (open) $('#goOpen').onclick = () => go('tx', { f: { cat: 'offen' }, from: 'Zurück zum Import' });
     } catch (e) { $('#importResult').innerHTML = `<p class="neg">${esc(e.message)}</p>`; }
   };
   input.onchange = () => run([...input.files]);
@@ -1583,6 +1615,10 @@ document.addEventListener('click', guard(async e => {
   if (b.id === 'pClear') { S.psel.clear(); return render(); }
   if (d.prename) { const n = prompt('Neuer Name für alle Buchungen von „' + d.prename + '"', d.prename); return n && n.trim() !== d.prename ? mergePayees([d.prename], n) : null; }
   if (d.paytx) { const x = payeeStats(scoped()).find(x => x.name === d.paytx); return x && go('tx', { f: { ids: x.ids, idsLabel: `Empfänger: ${x.name}` }, from: fromLabel() }); }
+  if (d.batch) {
+    const b = importBatches().find(x => x.key === d.batch);
+    return b && go('tx', { f: { ids: b.ids, idsLabel: `Import ${fmtAt(b.at)} · ${accById(b.acc)?.name || ''} · ${b.ids.length}` }, from: fromLabel() });
+  }
   if ('clearids' in d) { S.f.ids = null; S.f.idsLabel = ''; return render(); }
   if (b.id === 'csvFiltered') return exportCsv(filteredTxs(), `buchungen-${stamp()}.csv`);
   if (b.id === 'csvAll') return exportCsv(S.txs, `buchungen-alle-${stamp()}.csv`);
