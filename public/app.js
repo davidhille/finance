@@ -436,10 +436,29 @@ const th = (k, label, cls = '') => {
   return `<th class="sortable${cls ? ' ' + cls : ''}${on ? ' on' : ''}" data-tsort="${k}" title="Nach ${TSORT[k][0]} sortieren${k === 'amount' ? ' (▲ größte Ausgaben zuerst, ▼ größte Einnahmen zuerst)' : ''}" aria-sort="${on ? (S.tsort.dir > 0 ? 'ascending' : 'descending') : 'none'}">${label}<span class="arr">${arrow}</span></th>`;
 };
 
+S.tpage = 1;
+S.tsize = (() => { try { return +localStorage.getItem('fin_tsize') || 100; } catch { return 100; } })();
+function pager(total) {
+  const size = S.tsize || total || 1, pages = Math.max(1, Math.ceil(total / size)), p = S.tpage;
+  const from = total ? (p - 1) * size + 1 : 0, to = Math.min(total, p * size);
+  const nums = [...new Set([1, p - 2, p - 1, p, p + 1, p + 2, pages].filter(n => n >= 1 && n <= pages))].sort((a, b) => a - b);
+  let btns = '', prev = 0;
+  for (const n of nums) { if (n - prev > 1) btns += '<span class="muted">…</span>'; btns += `<button class="pg${n === p ? ' on' : ''}" data-tpage="${n}">${n}</button>`; prev = n; }
+  return `<div class="pager"><span class="muted">${from}–${to} von ${total}</span>
+    ${pages > 1 ? `<span class="pgs"><button class="pg" data-tpage="${p - 1}"${p === 1 ? ' disabled' : ''} aria-label="Vorige Seite">‹</button>${btns}<button class="pg" data-tpage="${p + 1}"${p === pages ? ' disabled' : ''} aria-label="Nächste Seite">›</button></span>` : ''}
+    <label class="muted">pro Seite <select class="tsize">${[50, 100, 250, 500, 0].map(n => `<option value="${n}"${S.tsize === n ? ' selected' : ''}>${n || 'alle'}</option>`).join('')}</select></label></div>`;
+}
+
 function viewTx() {
   const list = sortTx(filteredTxs());
+  // Neue Filter/Sortierung → zurück auf Seite 1
+  const sig = JSON.stringify([S.f, S.acc, S.tsort]);
+  if (sig !== S.tsig) { S.tsig = sig; S.tpage = 1; }
+  const pages = Math.max(1, Math.ceil(list.length / (S.tsize || list.length || 1)));
+  if (S.tpage > pages) S.tpage = pages;
+  const pageList = S.tsize ? list.slice((S.tpage - 1) * S.tsize, S.tpage * S.tsize) : list;
   const sum = list.reduce((a, t) => a + t.amount, 0);
-  const rows = list.slice(0, 600).map(t => {
+  const rows = pageList.map(t => {
     const st = !t.subcategory_id ? '<span class="state offen">offen</span>'
       : t.assign_state === 'vorschlag' ? `<span class="state vorschlag">Vorschlag</span> <button class="icon" data-ok="${t.id}" title="Vorschlag bestätigen">✓</button>`
       : t.assign_state === 'auto' ? '<span class="state auto">auto</span>' : '';
@@ -478,7 +497,7 @@ function viewTx() {
       <button class="ghost small" id="csvFiltered" title="Diese Liste als CSV (Excel) herunterladen"${list.length ? '' : ' disabled'}>⬇ CSV</button></div>
     ${list.length ? `<div class="tablewrap"><table class="txt">
       <thead><tr><th class="c-sel"><input type="checkbox" id="selAll" title="Alle sichtbaren auswählen"></th>${th('date', 'Datum')}${S.acc === 'alle' ? th('acc', 'Konto') : ''}${th('payee', 'Empfänger / Auftraggeber')}${th('purpose', 'Verwendungszweck')}${th('amount', 'Betrag', 'num')}${th('cat', 'Kategorie')}${th('state', 'Status')}<th></th></tr></thead>
-      <tbody>${rows}</tbody></table></div>${list.length > 600 ? '<p class="muted">Die ersten 600 werden angezeigt – Filter eingrenzen.</p>' : ''}`
+      <tbody>${rows}</tbody></table></div>${pager(list.length)}`
       : `<p class="muted">${S.f.cat === 'offen' ? 'Alles zugeordnet. 👌' : 'Keine Buchungen für diesen Filter.'}</p>`}
   </div>`;
 }
@@ -1186,7 +1205,9 @@ function renderBulk() {
   if (S.view === 'payees') return;
   if (S.view !== 'tx' || !S.sel.size) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
   const sel = S.txs.filter(t => S.sel.has(t.id)), sum = sel.reduce((a, t) => a + t.amount, 0);
+  const all = filteredTxs().length;
   bar.innerHTML = `<b>${sel.length} ausgewählt</b><span class="num">${eur(sum)}</span>
+    ${sel.length < all ? `<button class="ghost" id="bulkAll" title="Alle Treffer des Filters, über alle Seiten">alle ${all} auswählen</button>` : ''}
     <select id="bulkSub">${subOptions(null, false, S.acc).replace('<option value="">– offen –</option>', '<option value="">Kategorie wählen…</option><option value="__open">– auf offen setzen –</option>')}</select>
     <button class="btn small" id="bulkAssign">Zuordnen</button>
     <input id="bulkTag" list="tagList" placeholder="Tag" style="width:120px"><button class="ghost" id="bulkTagAdd">+ Tag</button>
@@ -1561,6 +1582,7 @@ document.addEventListener('change', guard(async e => {
   if (t.id === 'fMonth') { S.f.month = t.value; S.sel.clear(); return render(); }
   if (t.id === 'fCat') { S.f.cat = t.value; S.f.sub = ''; S.sel.clear(); return render(); }
   if (t.id === 'fSub') { S.f.sub = t.value; return render(); }
+  if (t.classList.contains('tsize')) { S.tsize = +t.value; S.tpage = 1; try { localStorage.setItem('fin_tsize', S.tsize); } catch {} return render(); }
   if (t.id === 'tSortSel') { const [k, d] = t.value.split('|'); S.tsort = { k, dir: +d }; try { localStorage.setItem('fin_tsort', JSON.stringify(S.tsort)); } catch {} return keepScroll(render); }
   if (t.id === 'fTag') { S.f.tag = t.value; S.sel.clear(); return render(); }
   if (t.dataset.selid) { t.checked ? S.sel.add(t.dataset.selid) : S.sel.delete(t.dataset.selid); return renderBulk(); }
@@ -1605,6 +1627,8 @@ document.addEventListener('input', e => {
 });
 
 document.addEventListener('click', guard(async e => {
+  const pgb = e.target.closest('button[data-tpage]');
+  if (pgb) { S.tpage = +pgb.dataset.tpage; render(); document.querySelector('.listhead')?.scrollIntoView({ block: 'start' }); window.scrollBy(0, -110); return; }
   const ts = e.target.closest('th[data-tsort]');
   if (ts) return setSort(ts.dataset.tsort);
   const dr = e.target.closest('td[data-drill]');
@@ -1661,6 +1685,7 @@ document.addEventListener('click', guard(async e => {
   if (b.id === 'bulkTagAdd') return bulkTag();
   if (b.id === 'bulkDel') return bulkDelete();
   if (b.id === 'bulkClear') { S.sel.clear(); return render(); }
+  if (b.id === 'bulkAll') { filteredTxs().forEach(t => S.sel.add(t.id)); return keepScroll(render); }
   if (d.exp) { S.expanded.has(d.exp) ? S.expanded.delete(d.exp) : S.expanded.add(d.exp); return render(); }
   if (d.ok) { const t = S.txs.find(x => x.id === d.ok); return setCategory(t.id, t.subcategory_id); }
   if (d.del) return deleteTx(d.del);

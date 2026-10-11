@@ -146,6 +146,12 @@ th.sortable:hover{color:var(--ink)}
 th.sortable.on{color:var(--accent)}
 th.sortable .arr{display:inline-block;width:12px;margin-left:3px;font-size:9px}
 select.sortsel{font-size:13px;padding:4px 6px}
+.pager{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between;margin-top:12px}
+.pgs{display:flex;gap:4px;align-items:center}
+button.pg{min-width:32px;height:30px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;font:inherit;cursor:pointer}
+button.pg.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.pg:disabled{opacity:.35;cursor:default}
+.pager select{font-size:13px;padding:3px 6px}
 @media (min-width:721px){ select.sortsel{display:none} }
 #logout{font-size:16px}
 /* Zurück-Leiste */
