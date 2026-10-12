@@ -412,7 +412,7 @@ function filteredTxs() {
   const plainNum = amt && /^[+-]?\s*[\d.,]+$/.test(ql);
   const variants = plainNum ? [...new Set([ql.replace(/^[+-]\s*/, ''), ql.replace(/^[+-]\s*/, '').replace(',', '.'), ql.replace(/^[+-]\s*/, '').replace('.', ',')])] : [ql];
   const txt = t => `${t.payee} ${t.purpose} ${t.counterparty_raw} ${t.iban || ''} ${t.note || ''} ${(t.tags || []).join(' ')}`.toLowerCase();
-  return scoped().filter(t => {
+  return (idSet ? S.txs : scoped()).filter(t => {
     if (idSet && !idSet.has(t.id)) return false;
     if (tag && !(t.tags || []).includes(tag)) return false;
     if (year !== 'alle' && t.booking_date.slice(0, 4) !== year) return false;
@@ -467,6 +467,7 @@ function pager(total) {
     <label class="muted">pro Seite <select class="tsize">${[50, 100, 250, 500, 0].map(n => `<option value="${n}"${S.tsize === n ? ' selected' : ''}>${n || 'alle'}</option>`).join('')}</select></label></div>`;
 }
 
+const showAccCol = () => S.acc === 'alle' || !!S.f.ids;
 function viewTx() {
   const list = sortTx(filteredTxs());
   // Neue Filter/Sortierung → zurück auf Seite 1
@@ -484,7 +485,7 @@ function viewTx() {
     return `<tr>
       <td class="c-sel"><input type="checkbox" data-selid="${t.id}"${S.sel.has(t.id) ? ' checked' : ''} aria-label="Auswählen"></td>
       <td class="c-date num muted">${fmtDate(t.booking_date)}</td>
-      ${S.acc === 'alle' ? `<td class="c-acc muted">${esc(accById(t.account_id)?.name || '–')}</td>` : ''}
+      ${showAccCol() ? `<td class="c-acc muted">${esc(accById(t.account_id)?.name || '–')}</td>` : ''}
       <td class="c-payee"><input class="payee" data-payee="${t.id}" value="${esc(t.payee)}" title="Original: ${esc(t.counterparty_raw)}">${tags}</td>
       <td class="c-purpose purpose" title="${esc(t.purpose)}">${esc(t.purpose)}${t.note ? `<div class="note">📝 ${esc(t.note)}</div>` : ''}</td>
       <td class="c-amt num ${sign(t.amount)}">${eur(t.amount)}</td>
@@ -506,16 +507,17 @@ function viewTx() {
       ${allTags().length ? `<select id="fTag"><option value="">Alle Tags</option>${allTags().map(g => `<option${S.f.tag === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}</select>` : ''}
       <input id="fQ" placeholder="Text, Zahl oder Betrag (36,73 · >100 · 50-100)" title="Text/Zahl: sucht in Empfänger, Verwendungszweck, Notiz, Tags · Eine Zahl findet zusätzlich passende Beträge (36,73 genau · 36 = 36,00–36,99) · >100 · <=20 · 50-100 nur Beträge" style="min-width:240px" value="${esc(S.f.q)}">
       ${S.f.ids ? `<span class="chip">${esc(S.f.idsLabel || 'Auswahl')}<button class="icon" data-clearids title="Filter entfernen">×</button></span>` : ''}
+      ${S.f.ids && S.acc !== 'alle' && list.some(t => t.account_id !== S.acc) ? `<span class="muted" style="font-size:12px">inkl. Buchungen aus anderen Konten</span>` : ''}
       ${S.f.batch ? (isReviewed(S.f.batch) ? '<span class="tag t">✓ geprüft</span>' : `<button class="btn small" data-review="${esc(S.f.batch)}">✓ Import als geprüft markieren</button>`) : ''}
     </div>
     <div class="listhead"><span class="muted">${list.length} Buchungen · Summe <b class="num ${sign(sum)}">${eur(sum)}</b></span>
       <span class="spacer" style="flex:1"></span>
-      <select id="tSortSel" class="sortsel" aria-label="Sortierung">${Object.entries(TSORT).filter(([k]) => k !== 'acc' || S.acc === 'alle').flatMap(([k, [l]]) =>
+      <select id="tSortSel" class="sortsel" aria-label="Sortierung">${Object.entries(TSORT).filter(([k]) => k !== 'acc' || showAccCol()).flatMap(([k, [l]]) =>
         [1, -1].map(d => `<option value="${k}|${d}"${S.tsort.k === k && S.tsort.dir === d ? ' selected' : ''}>${l} ${k === 'date' ? (d > 0 ? 'alt → neu' : 'neu → alt') : k === 'amount' ? (d > 0 ? 'größte Ausgaben zuerst' : 'größte Einnahmen zuerst') : d > 0 ? 'A–Z' : 'Z–A'}</option>`)).join('')}</select>
       <button class="ghost small" data-view="payees" title="Alle Empfänger mit Summen, Schreibweisen zusammenfassen">Empfänger</button>
       <button class="ghost small" id="csvFiltered" title="Diese Liste als CSV (Excel) herunterladen"${list.length ? '' : ' disabled'}>⬇ CSV</button></div>
     ${list.length ? `<div class="tablewrap"><table class="txt">
-      <thead><tr><th class="c-sel"><input type="checkbox" id="selAll" title="Alle sichtbaren auswählen"></th>${th('date', 'Datum')}${S.acc === 'alle' ? th('acc', 'Konto') : ''}${th('payee', 'Empfänger / Auftraggeber')}${th('purpose', 'Verwendungszweck')}${th('amount', 'Betrag', 'num')}${th('cat', 'Kategorie')}${th('state', 'Status')}<th></th></tr></thead>
+      <thead><tr><th class="c-sel"><input type="checkbox" id="selAll" title="Alle sichtbaren auswählen"></th>${th('date', 'Datum')}${showAccCol() ? th('acc', 'Konto') : ''}${th('payee', 'Empfänger / Auftraggeber')}${th('purpose', 'Verwendungszweck')}${th('amount', 'Betrag', 'num')}${th('cat', 'Kategorie')}${th('state', 'Status')}<th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>${pager(list.length)}`
       : `<p class="muted">${S.f.cat === 'offen' ? 'Alles zugeordnet. 👌' : 'Keine Buchungen für diesen Filter.'}</p>`}
   </div>`;
