@@ -1206,14 +1206,14 @@ window.addEventListener('popstate', e => {
 // Adresse direkt geändert (z. B. Lesezeichen, #tx eingetippt)
 window.addEventListener('hashchange', () => {
   const h = location.hash.slice(1);
-  if (h !== S.view && ['home', 'tx', 'year', 'compare', 'fix', 'cats', 'import', 'payees'].includes(h) && !history.state?.view) {
+  if (h !== S.view && ['home', 'month', 'tx', 'year', 'compare', 'fix', 'cats', 'import', 'payees'].includes(h) && !history.state?.view) {
     S.view = h; S.from = null; S.sel.clear();
     try { history.replaceState(snapshot(), '', '#' + h); } catch {}
     render();
   }
 });
 const backBar = () => S.from ? `<div class="backbar"><button data-back>← ${esc(S.from)}</button></div>` : '';
-const FROM = { import: 'Zurück zum Import', payees: 'Zurück zu Empfänger', home: 'Zurück zur Übersicht', year: () => `Zurück zur Jahresübersicht ${S.yearSel}`, cats: 'Zurück zu Einstellungen', fix: 'Zurück zu Fixkosten', compare: 'Zurück zum Vergleich' };
+const FROM = { month: () => `Zurück zu ${ymLabel(S.homeMonth)}`, import: 'Zurück zum Import', payees: 'Zurück zu Empfänger', home: 'Zurück zur Übersicht', year: () => `Zurück zur Jahresübersicht ${S.yearSel}`, cats: 'Zurück zu Einstellungen', fix: 'Zurück zu Fixkosten', compare: 'Zurück zum Vergleich' };
 const fromLabel = () => { const f = FROM[S.view]; return typeof f === 'function' ? f() : f || null; };
 
 // ---------- Tags ----------
@@ -1324,7 +1324,7 @@ function viewHome() {
   const tagStats = allTags().map(g => { const l = all.filter(t => (t.tags || []).includes(g)); return { g, n: l.length, sum: l.reduce((a, t) => a + t.amount, 0) }; });
   const recent = all.slice().sort((a, b) => b.booking_date.localeCompare(a.booking_date)).slice(0, 8);
   return `<div class="filters"><div class="monthnav"><button class="icon" data-hm="-1" title="Vormonat">◀</button><b>${ymLabel(ym)}</b><button class="icon" data-hm="1" title="Nächster Monat"${ym >= ymOf(latest) ? ' disabled' : ''}>▶</button></div>
-      <span class="muted">${inMonth.length} Buchungen</span></div>
+      <span class="muted">${inMonth.length} Buchungen</span><span class="spacer" style="flex:1"></span><button class="ghost small" data-view="month">Monat im Detail →</button></div>
     ${open ? `<div class="callout"><span><b>${open}</b> Buchung(en) noch nicht zugeordnet.</span><button class="btn small" data-gotx="offen">Jetzt zuordnen</button></div>` : ''}
     ${(() => { const b = pendingBatch(); return b ? `<div class="callout" style="background:var(--accent-soft);border-color:var(--accent)"><span>Ungeprüfter Import: <b>${b.ids.length}</b> Buchung(en) · ${esc(accById(b.acc)?.name || '')} · ${fmtAt(b.at)} Uhr</span>
       <span class="filters" style="margin:0;flex-wrap:nowrap"><button class="ghost small" data-batch="${esc(b.key)}">Prüfen</button><button class="btn small" data-review="${esc(b.key)}" title="Banner ausblenden">✓ Erledigt</button></span></div>` : ''; })()}
@@ -1345,6 +1345,124 @@ function viewHome() {
           <span class="num ${sign(t.amount)}">${eur(t.amount)}</span></div>`).join('')}</div>
       </div>
     </div>`;
+}
+
+// ---------- Monatsansicht (Detail) ----------
+const daysIn = ym => new Date(+ym.slice(0, 4), +ym.slice(5), 0).getDate();
+const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const isExp = t => kindOf(t) === 'ausgabe';
+// Kumulierte Ausgaben je Tag (Index 0 = Tag 1)
+function cumByDay(list, n) {
+  const d = Array(n).fill(0);
+  list.forEach(t => { if (isExp(t)) d[Math.min(n, +t.booking_date.slice(8, 10)) - 1] -= t.amount; });
+  for (let i = 1; i < n; i++) d[i] += d[i - 1];
+  return d;
+}
+let mChart = null;
+function viewMonth() {
+  const all = scoped();
+  if (!all.length) return `<div class="card muted">Noch keine Buchungen – zuerst importieren.</div>`;
+  const latest = all.reduce((m, t) => t.booking_date > m ? t.booking_date : m, '0000');
+  if (!S.homeMonth) S.homeMonth = all.some(t => ymOf(t.booking_date) === todayStr().slice(0, 7)) ? todayStr().slice(0, 7) : ymOf(latest);
+  const ym = S.homeMonth, n = daysIn(ym), prevYm = ymAdd(ym, -1);
+  const inM = all.filter(t => ymOf(t.booking_date) === ym), inP = all.filter(t => ymOf(t.booking_date) === prevYm);
+  // Vergleichsbasis: die 12 Monate davor (nur Monate mit Daten)
+  const base = []; for (let i = 1; i <= 12; i++) { const m = ymAdd(ym, -i); const l = all.filter(t => ymOf(t.booking_date) === m); if (l.length) base.push([m, l]); }
+  const avg = k => base.length ? base.reduce((a, [, l]) => a + periodResult(l)[k], 0) / base.length : null;
+  const r = periodResult(inM), p = periodResult(inP);
+  // Stand: läuft der Monat noch?
+  const today = todayStr(), running = today.slice(0, 7) === ym;
+  const lastData = inM.reduce((m, t) => t.booking_date > m ? t.booking_date : m, '');
+  const dayNow = running ? +today.slice(8, 10) : n;
+  // Fixkosten, die in diesem Monat noch kommen
+  const fx = detectRecurring().filter(x => x.active && !x.excluded && x.kind === 'ausgabe');
+  const due = running ? fx.filter(x => {
+    const paid = x.ids.some(id => { const t = S.txs.find(y => y.id === id); return t && ymOf(t.booking_date) === ym; });
+    return !paid && (x.months === 1 || ymOf(x.next) === ym);
+  }).map(x => ({ ...x, day: Math.min(n, +x.last.slice(8, 10)) })).sort((a, b) => a.day - b.day) : [];
+  const dueSum = due.reduce((a, x) => a + x.amount, 0);
+  // Prognose: bisher + offene Fixkosten + variable Ausgaben im bisherigen Tempo
+  const fxIds = new Set(fx.flatMap(x => x.ids));
+  const varSoFar = -inM.filter(t => isExp(t) && !fxIds.has(t.id)).reduce((a, t) => a + t.amount, 0);
+  const proj = running ? r.exp + dueSum + (dayNow ? varSoFar / dayNow : 0) * (n - dayNow) : r.exp;
+  const avgExp = avg('exp'), avgInc = avg('inc');
+  // Vergleich zum gleichen Tag im Vormonat
+  const pN = daysIn(prevYm), pCum = cumByDay(inP, pN), cum = cumByDay(inM, n);
+  const sameDayPrev = pCum[Math.min(dayNow, pN) - 1] || 0, nowExp = cum[dayNow - 1] || 0;
+  const tile = (label, val, sub, cls = '', main = false) => `<div class="tile${main ? ' main' : ''}"><div class="tl">${label}</div><div class="tv ${cls}">${val}</div>${sub ? `<div class="td">${sub}</div>` : ''}</div>`;
+  const vs = (cur, ref, better, txt) => ref == null ? '' : `${deltaTxt('x', cur, ref, better)} <span class="muted">${txt}</span>`;
+  // Kategorien: Monat, Vormonat, Ø 12 Monate, Budget
+  const sumBy = (list, keyFn) => { const m = new Map(); list.forEach(t => { if (!isExp(t)) return; const k = keyFn(t); m.set(k, (m.get(k) || 0) - t.amount); }); return m; };
+  const catKey = t => t.subcategory_id && t.assign_state !== 'vorschlag' ? catOfTx(t)?.id || 'offen' : 'offen';
+  const subKey = t => t.subcategory_id && t.assign_state !== 'vorschlag' ? t.subcategory_id : 'offen';
+  // Laufender Monat: Vergleich jeweils nur bis zum gleichen Tag
+  const cut = l => running ? l.filter(t => +t.booking_date.slice(8, 10) <= dayNow) : l;
+  const inPc = cut(inP), baseC = base.map(([m, l]) => [m, cut(l)]);
+  const cM = sumBy(inM, catKey), cP = sumBy(inPc, catKey), sM = sumBy(inM, subKey), sP = sumBy(inPc, subKey);
+  const cA = new Map(), sA = new Map();
+  baseC.forEach(([, l]) => { sumBy(l, catKey).forEach((v, k) => cA.set(k, (cA.get(k) || 0) + v / base.length)); sumBy(l, subKey).forEach((v, k) => sA.set(k, (sA.get(k) || 0) + v / base.length)); });
+  const cats = [...new Set([...cM.keys(), ...S.cats.filter(c => c.kind === 'ausgabe' && c.budget > 0).map(c => c.id)])].filter(k => k !== 'offen')
+    .map(k => catById(k)).filter(Boolean).sort((a, b) => (cM.get(b.id) || 0) - (cM.get(a.id) || 0));
+  const dCell = (cur, ref) => { if (!ref) return '<td class="num muted">–</td>'; const d = cur - ref, pc = d / ref * 100; return `<td class="num ${Math.abs(pc) < 5 ? 'muted' : d > 0 ? 'neg' : 'pos'}">${d > 0 ? '+' : ''}${pc.toFixed(0)} %</td>`; };
+  const budCell = (c, v) => { if (!(c.budget > 0)) return '<td></td>'; const ratio = v / c.budget, exp = running ? dayNow / n : 1;
+    return `<td style="min-width:140px"><div class="bt" style="height:6px;background:var(--line);border-radius:3px;position:relative"><div class="bf ${ratio > 1 ? 'over' : ratio > exp + 0.1 ? 'warn' : ''}" style="height:100%;border-radius:3px;width:${Math.min(100, ratio * 100)}%;background:${ratio > 1 ? 'var(--neg)' : ratio > exp + 0.1 ? 'var(--warn)' : 'var(--accent)'}"></div>${running ? `<div style="position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink);opacity:.55;left:${exp * 100}%"></div>` : ''}</div><div class="note">${eur(v)} von ${eur(c.budget)}</div></td>`; };
+  const mRow = (cls, label, cur, prev, av, key, extra = '') => `<tr class="${cls}">${label}<td class="num drill b" data-drill="${key}|m">${eur(cur)}</td><td class="num muted">${prev ? eur(prev) : '–'}</td><td class="num muted">${av ? eur(av) : '–'}</td>${dCell(cur, av)}${extra}</tr>`;
+  let rows = '';
+  for (const c of cats) {
+    const open = S.expanded.has('m:' + c.id), v = cM.get(c.id) || 0;
+    rows += mRow('cat clickable', `<td data-mexp="${c.id}">${open ? '▾' : '▸'} ${esc(c.name)} <button class="icon trend" data-trend="cat:${c.id}" title="Verlauf" aria-label="Verlauf">${IC_TREND}</button></td>`, v, cP.get(c.id), cA.get(c.id), c.id, budCell(c, v));
+    if (open) S.subs.filter(x => x.category_id === c.id && (sM.get(x.id) || sP.get(x.id) || sA.get(x.id))).sort((a, b) => (sM.get(b.id) || 0) - (sM.get(a.id) || 0))
+      .forEach(x => { rows += mRow('sub', `<td>${esc(x.name)}</td>`, sM.get(x.id) || 0, sP.get(x.id), sA.get(x.id), 'sub:' + x.id, '<td></td>'); });
+  }
+  if (cM.get('offen')) rows += mRow('cat', '<td><span class="state offen">nicht zugeordnet</span></td>', cM.get('offen'), cP.get('offen'), cA.get('offen'), 'offen', '<td></td>');
+  const top = inM.filter(isExp).sort((a, b) => a.amount - b.amount).slice(0, 8);
+  const incList = inM.filter(t => kindOf(t) === 'einnahme').sort((a, b) => b.amount - a.amount);
+  const latestYm = ymOf(latest) > today.slice(0, 7) ? ymOf(latest) : today.slice(0, 7);
+  return `<div class="filters"><div class="monthnav"><button class="icon" data-hm="-1" title="Vormonat">◀</button><b>${ymLabel(ym)}</b><button class="icon" data-hm="1" title="Nächster Monat"${ym >= latestYm ? ' disabled' : ''}>▶</button></div>
+      <span class="muted">${inM.length} Buchungen${running ? ` · Tag ${dayNow} von ${n}${lastData ? ` · Daten bis ${fmtDate(lastData)}` : ''}` : ''}</span>
+      ${!running && today.slice(0, 7) !== ym && all.some(t => ymOf(t.booking_date) === today.slice(0, 7)) ? `<button class="ghost small" data-hmnow>aktueller Monat</button>` : ''}</div>
+    <div class="card"><div class="tiles" style="margin-top:0">
+      ${tile(running ? 'Ausgaben bisher' : 'Ausgaben', eur(r.exp), running ? vs(nowExp, sameDayPrev, false, `vs. Vormonat bis Tag ${dayNow}`) : vs(r.exp, avgExp, false, 'vs. Ø 12 Monate'), '', true)}
+      ${running ? tile('Prognose Monatsende', eur(proj), vs(proj, avgExp, false, 'vs. Ø 12 Monate')) : tile('Vormonat', eur(p.exp), vs(r.exp, p.exp, false, 'Differenz'))}
+      ${tile(running ? 'Einnahmen bisher' : 'Einnahmen', eur(r.inc), running ? (avgInc != null ? `<span class="muted">üblich: ${eur(avgInc)} / Monat</span>` : '') : vs(r.inc, avgInc, true, 'vs. Ø 12 Monate'))}
+      ${tile(running ? 'Ergebnis bisher' : 'Ergebnis', eur(r.result), running && avgInc != null ? `<span class="muted">Prognose: </span><span class="${sign(Math.max(r.inc, avgInc) - proj)}">${eur(Math.max(r.inc, avgInc) - proj)}</span>` : vs(r.result, p.result, true, 'vs. Vormonat'), sign(r.result))}
+    </div>
+    ${running ? `<p class="muted" style="margin:8px 0 0;font-size:12px">Prognose = bisherige Ausgaben + noch fällige Fixkosten (${eur(dueSum)}) + variable Ausgaben im bisherigen Tempo (${eur(dayNow ? varSoFar / dayNow : 0)}/Tag). Ergebnis-Prognose mit Einnahmen mind. auf Ø-Niveau.</p>` : ''}</div>
+    <div class="grid2">
+      <div class="card"><div class="filters"><h2 style="margin:0">Ausgaben im Monatsverlauf</h2></div>
+        <div style="height:260px"><canvas id="mChart"></canvas></div>
+        <p class="muted" style="margin:6px 0 0;font-size:12px">Kumuliert je Tag: ${ymLabel(ym)} im Vergleich zu ${ymLabel(prevYm)} und dem Durchschnitt der letzten ${base.length} Monate.</p></div>
+      <div>${running ? `<div class="card"><div class="filters"><h2 style="margin:0">Noch fällig diesen Monat</h2><span class="spacer" style="flex:1"></span><b class="num">${eur(dueSum)}</b></div>
+          ${due.length ? `<div class="sublist">${due.map(x => `<div class="subrow"><span class="n"><button class="linkbtn" data-fixtx="${esc(x.id)}">${esc(x.payee)}</button> <span class="muted">· ca. ${x.day}.</span></span><span class="num">${eur(x.amount)}</span></div>`).join('')}</div>`
+            : '<p class="muted" style="margin:0">Alle erkannten Fixkosten für diesen Monat sind schon gebucht.</p>'}</div>` : ''}
+        <div class="card"><h2>Größte Ausgaben</h2><div class="sublist">${top.map(t => `<div class="subrow"><span class="n"><button class="linkbtn" data-edit="${t.id}">${esc(t.payee || t.counterparty_raw || '–')}</button> <span class="muted">· ${fmtDate(t.booking_date).slice(0, 6)}${catOfTx(t) ? ' · ' + esc(catOfTx(t).name) : ''}</span></span><span class="num neg">${eur(t.amount)}</span></div>`).join('') || '<p class="muted">Keine Ausgaben.</p>'}</div></div>
+        ${incList.length ? `<div class="card"><h2>Einnahmen</h2><div class="sublist">${incList.slice(0, 6).map(t => `<div class="subrow"><span class="n"><button class="linkbtn" data-edit="${t.id}">${esc(t.payee || t.counterparty_raw || '–')}</button> <span class="muted">· ${fmtDate(t.booking_date).slice(0, 6)}</span></span><span class="num pos">${eur(t.amount)}</span></div>`).join('')}</div></div>` : ''}
+      </div>
+    </div>
+    <div class="card"><h2>Ausgaben nach Kategorie</h2>
+      <div class="tablewrap"><table class="ytable"><thead><tr><th>Kategorie</th><th class="num">${MONTHS[+ym.slice(5) - 1]}</th><th class="num">Vormonat${running ? ` <span class="muted" style="font-weight:400">bis ${dayNow}.</span>` : ''}</th><th class="num">Ø 12 Mon.${running ? ` <span class="muted" style="font-weight:400">bis ${dayNow}.</span>` : ''}</th><th class="num">vs. Ø</th><th>Budget${running ? ' <span class="muted" style="font-weight:400">(Strich = Monatsfortschritt)</span>' : ''}</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6" class="muted">Keine Ausgaben in diesem Monat.</td></tr>'}
+      ${(() => { const pe = periodResult(inPc).exp, ae = baseC.length ? baseC.reduce((a, [, l]) => a + periodResult(l).exp, 0) / baseC.length : null;
+        return `<tr class="total"><td>Summe Ausgaben</td><td class="num">${eur(r.exp)}</td><td class="num">${eur(pe)}</td><td class="num">${ae != null ? eur(ae) : '–'}</td>${dCell(r.exp, ae)}<td></td></tr>`; })()}</tbody></table></div>
+      <p class="muted" style="margin:8px 0 0;font-size:12px">Kategorie anklicken = Unterkategorien · Betrag anklicken = Buchungen · vs. Ø: rot = mehr ausgegeben als üblich.</p></div>`;
+}
+function drawMonthChart() {
+  const el = $('#mChart'); if (!el || !window.Chart) return;
+  const all = scoped(), ym = S.homeMonth, n = daysIn(ym), prevYm = ymAdd(ym, -1);
+  const running = todayStr().slice(0, 7) === ym, dayNow = running ? +todayStr().slice(8, 10) : n;
+  const cur = cumByDay(all.filter(t => ymOf(t.booking_date) === ym), n).map((v, i) => i < dayNow ? Math.round(v) : null);
+  const prev = cumByDay(all.filter(t => ymOf(t.booking_date) === prevYm), n).map(Math.round);
+  const bases = []; for (let i = 1; i <= 12; i++) { const m = ymAdd(ym, -i); const l = all.filter(t => ymOf(t.booking_date) === m); if (l.length) bases.push(cumByDay(l, n)); }
+  const avg = bases.length ? Array.from({ length: n }, (_, i) => Math.round(bases.reduce((a, b) => a + b[i], 0) / bases.length)) : null;
+  const css = getComputedStyle(document.documentElement), col = v => css.getPropertyValue(v).trim();
+  if (mChart) mChart.destroy();
+  mChart = new Chart(el, { type: 'line', data: { labels: Array.from({ length: n }, (_, i) => i + 1), datasets: [
+    { label: MONTHS[+ym.slice(5) - 1], data: cur, borderColor: col('--accent'), backgroundColor: col('--accent') + '22', fill: true, borderWidth: 2.5, pointRadius: 0, tension: .2 },
+    { label: 'Vormonat', data: prev, borderColor: col('--muted'), borderDash: [4, 4], borderWidth: 1.5, pointRadius: 0, tension: .2 },
+    ...(avg ? [{ label: `Ø ${bases.length} Monate`, data: avg, borderColor: col('--warn'), borderWidth: 1.5, pointRadius: 0, tension: .2 }] : [])] },
+    options: { maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: col('--ink'), boxWidth: 12 } }, tooltip: { callbacks: { title: x => `Tag ${x[0].label}`, label: x => x.raw == null ? null : `${x.dataset.label}: ${eur(x.raw)}` } } },
+      scales: { x: { ticks: { color: col('--muted'), maxTicksLimit: 10 }, grid: { display: false } }, y: { ticks: { color: col('--muted'), callback: v => eur(v) }, grid: { color: col('--line') } } } } });
 }
 
 // ---------- Fixkosten & Abos ----------
@@ -1539,10 +1657,11 @@ function render() {
   $('#accSel').innerHTML = `<option value="alle">Alle Konten</option>` + S.accounts.map(a => `<option value="${a.id}"${a.id === S.acc ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
   if (S.acc === 'alle') $('#accSel').value = 'alle';
   document.querySelectorAll('[data-view="import"]').forEach(b => b.classList.toggle('active', S.view === 'import'));
-  const v = { home: viewHome, import: viewImport, tx: viewTx, year: viewYear, compare: viewCompare, fix: viewFix, cats: viewCats, payees: viewPayees }[S.view] || viewHome;
+  const v = { month: viewMonth, home: viewHome, import: viewImport, tx: viewTx, year: viewYear, compare: viewCompare, fix: viewFix, cats: viewCats, payees: viewPayees }[S.view] || viewHome;
   $('#view').innerHTML = backBar() + v();
   $('#tagList').innerHTML = allTags().map(g => `<option value="${esc(g)}">`).join('');
   if (S.view === 'compare') drawCompareChart();
+  if (S.view === 'month') drawMonthChart();
   if (S.view === 'cats') masonry();
   if (S.view === 'import') bindImport();
   renderBulk(); renderPayeeBar();
@@ -1652,11 +1771,14 @@ document.addEventListener('input', e => {
 document.addEventListener('click', guard(async e => {
   const pgb = e.target.closest('button[data-tpage]');
   if (pgb) { S.tpage = +pgb.dataset.tpage; render(); document.querySelector('.listhead')?.scrollIntoView({ block: 'start' }); window.scrollBy(0, -110); return; }
+  const mx = e.target.closest('td[data-mexp]');
+  if (mx && !e.target.closest('button')) { const k = 'm:' + mx.dataset.mexp; S.expanded.has(k) ? S.expanded.delete(k) : S.expanded.add(k); return keepScroll(render); }
   const ts = e.target.closest('th[data-tsort]');
   if (ts) return setSort(ts.dataset.tsort);
   const dr = e.target.closest('td[data-drill]');
   if (dr) {
-    const [key, m] = dr.dataset.drill.split('|');
+    let [key, m] = dr.dataset.drill.split('|');
+    if (m === 'm') { S.yearSel = +S.homeMonth.slice(0, 4); m = String(+S.homeMonth.slice(5)); }
     if (key.startsWith('pay:')) {
       const [, subId, ...nm] = key.split(':'), name = decodeURIComponent(nm.join(':'));
       const ids = scoped().filter(t => t.subcategory_id === subId && (t.payee || t.counterparty_raw || '–') === name && t.assign_state !== 'vorschlag'
@@ -1675,7 +1797,8 @@ document.addEventListener('click', guard(async e => {
   }
   if (d.view) return go(d.view);
   if (d.jump) return document.getElementById(d.jump)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  if (d.hm) { S.homeMonth = ymAdd(S.homeMonth, +d.hm); try { history.replaceState(snapshot(), '', '#home'); } catch {} return render(); }
+  if (d.hm) { S.homeMonth = ymAdd(S.homeMonth, +d.hm); try { history.replaceState(snapshot(), '', '#' + S.view); } catch {} return render(); }
+  if ('hmnow' in d) { S.homeMonth = todayStr().slice(0, 7); return render(); }
   if (d.gotx) return go('tx', { f: { cat: d.gotx }, from: fromLabel() });
   if (d.hometx) return go('tx', { f: { cat: d.hometx, year: S.homeMonth.slice(0, 4), month: String(+S.homeMonth.slice(5)) }, from: fromLabel() });
   if (d.tagf) return go('tx', { f: { tag: d.tagf }, from: fromLabel() });
@@ -1811,7 +1934,7 @@ async function start() {
   try { S.acc = localStorage.getItem('fin_acc') || 'alle'; } catch {}
   try { await loadAll(); } catch (e) { return fail(e); }
   const h = location.hash.slice(1);
-  S.view = ['home', 'tx', 'year', 'compare', 'fix', 'cats', 'import', 'payees'].includes(h) ? h : S.txs.length ? 'home' : 'import';
+  S.view = ['home', 'month', 'tx', 'year', 'compare', 'fix', 'cats', 'import', 'payees'].includes(h) ? h : S.txs.length ? 'home' : 'import';
   try { history.replaceState(snapshot(), '', '#' + S.view); } catch {}
   render();
 }

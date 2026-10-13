@@ -167,7 +167,7 @@ input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
 .tag.t{background:var(--accent-soft);color:var(--accent);cursor:pointer;border:0;font:inherit;font-size:11px}
 .note{color:var(--muted);font-size:12px;margin-top:2px}
 /* Übersicht */
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start;margin-bottom:16px}
 .grid2>.card{margin:0}
 .grid2>div>.card{margin:0 0 16px}
 .grid2>div>.card:last-child{margin-bottom:0}
@@ -241,6 +241,7 @@ input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
     </div>
     <nav>
       <button data-view="home">Übersicht</button>
+      <button data-view="month">Monat</button>
       <button data-view="tx">Buchungen <span id="openBadge" class="badge hidden"></span></button>
       <button data-view="year">Jahr</button>
       <button data-view="compare">Vergleich</button>
